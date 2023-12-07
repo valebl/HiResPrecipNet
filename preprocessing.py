@@ -332,7 +332,10 @@ if __name__ == '__main__':
     pr_sel_cl[torch.isnan(pr_high)] = torch.nan
 
     pr_sel_reg = torch.where(pr_high >= threshold, torch.log1p(pr_high), torch.nan).float()
-    pr_sel_cl[torch.isnan(pr_high)] = torch.nan
+    pr_sel_reg[torch.isnan(pr_high)] = torch.nan
+
+    pr_sel_reg_combined = torch.log1p(pr_high).float()
+    pr_sel_reg_combined[torch.isnan(pr_high)] = torch.nan
 
     weights = [1,2,5,10,20,50]
     weights_thresholds = [0,1,5,10,20,50]
@@ -350,6 +353,9 @@ if __name__ == '__main__':
      
     with open(args.output_path + 'target_train_reg.pkl', 'wb') as f:
         pickle.dump(pr_sel_reg, f)    
+
+    with open(args.output_path + 'target_train_reg_combined.pkl', 'wb') as f:
+        pickle.dump(pr_sel_reg_combined, f)    
 
     with open(args.output_path + 'reg_weights.pkl', 'wb') as f:
         pickle.dump(reg_weights, f)    
@@ -385,7 +391,9 @@ if __name__ == '__main__':
     #-----------------------------------------------------
     #----------------------- EDGES -----------------------
     #-----------------------------------------------------
-    
+
+    write_log(f"\nUsing radius lon: {args.lon_grid_radius_low2high} and lat: {args.lat_grid_radius_low2high} for lon2high edges.", args)
+
     edges_low = derive_edge_indexes(lon_radius=args.lon_grid_radius_low, lat_radius=args.lat_grid_radius_low,
                                   lon_n1=lon_low, lat_n1=lat_low, lon_n2=lon_low, lat_n2=lat_low)
 

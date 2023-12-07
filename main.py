@@ -5,7 +5,7 @@ import torchvision.ops.focal_loss
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
-from dataset import Dataset_Graph, Iterable_Graph
+from dataset import Dataset_Graph, Dataset_Graph_Combined, Iterable_Graph
 import dataset
 import time
 import argparse
@@ -13,10 +13,9 @@ import sys
 import os
 import dataset
 
-from HiResPrecipNet import HiResPrecipNet
-
+import HiResPrecipNet as models
 import utils
-from utils import Trainer, date_to_idxs
+from utils import Trainer, date_to_idxs, load_checkpoint
 
 from accelerate import Accelerator
 
@@ -27,8 +26,10 @@ parser.add_argument('--input_path', type=str, help='path to input directory')
 parser.add_argument('--output_path', type=str, help='path to output directory')
 parser.add_argument('--log_file', type=str, default='log.txt', help='log file')
 
-parser.add_argument('--target_file', type=str, default=None)
+parser.add_argument('--target_file_cl', type=str, default=None)
+parser.add_argument('--target_file_reg', type=str, default=None)
 parser.add_argument('--graph_file', type=str, default=None) 
+parser.add_argument('--weights_file', type=str, default=None) 
 
 parser.add_argument('--out_checkpoint_file', type=str, default="checkpoint.pth")
 parser.add_argument('--out_loss_file', type=str, default="loss.csv")
@@ -53,7 +54,8 @@ parser.add_argument('--checkpoint_ctd', type=str, help='checkpoint to load to co
 parser.add_argument('--ctd_training',  action='store_true')
 parser.add_argument('--no-ctd_training', dest='ctd_training', action='store_false')
 
-parser.add_argument('--loss_fn', type=str, default="mse_loss")
+parser.add_argument('--loss_fn_cl', type=str, default="mse_loss")
+parser.add_argument('--loss_fn_reg', type=str, default="mse_loss")
 parser.add_argument('--lon_min', type=float)
 parser.add_argument('--lon_max', type=float)
 parser.add_argument('--lat_min', type=float)
@@ -110,21 +112,36 @@ if __name__ == '__main__':
 #--------------- MODEL, LOSS, OPTIMIZER --------------
 #-----------------------------------------------------
 
-    model = HiResPrecipNet()
+    Model = getattr(models, args.model_name)
+    model = Model()
 
-    if args.loss_fn == 'sigmoid_focal_loss':
-        loss_fn = getattr(torchvision.ops.focal_loss, args.loss_fn)
-    elif args.loss_fn == 'weighted_cross_entropy_loss':
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.1,1]))
-    elif args.loss_fn == 'weighted_mse_loss':
-        loss_fn = getattr(utils, 'weighted_mse_loss')
+    # Classifier
+    if args.model_type == "cl" or args.model_type == "combined":
+        if args.loss_fn_cl == 'sigmoid_focal_loss':
+            loss_fn_cl = getattr(torchvision.ops.focal_loss, args.loss_fn_cl)
+        elif args.loss_fn_cl == 'weighted_cross_entropy_loss':
+            loss_fn_cl = nn.CrossEntropyLoss(weight=torch.tensor([0.1,1]))
+        else:
+            loss_fn_cl = getattr(nn.functional, args.loss_fn_cl) 
     else:
-        loss_fn = getattr(nn.functional, args.loss_fn)    
+        loss_fn_cl = None
+
+    # Regressor
+    if args.model_type == "reg" or args.model_type == "combined":
+        if args.loss_fn_reg == 'weighted_mse_loss':
+            loss_fn_reg = getattr(utils, 'weighted_mse_loss')
+        elif args.loss_fn_reg == 'quantile_loss':
+            loss_fn_reg = getattr(utils, 'quantile_loss') 
+        else:
+            loss_fn_reg = getattr(nn.functional, args.loss_fn_reg) 
+    else:
+        loss_fn_reg = None
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
             f.write(f"\nStarting with pct_trainset={args.pct_trainset}, lr={args.lr}, "+
-                f"weight decay = {args.weight_decay} and epochs={args.epochs}.")
+                f"weight decay = {args.weight_decay} and epochs={args.epochs}." + 
+                f"loss cl: {loss_fn_cl} and loss reg: {loss_fn_reg}") 
             if accelerator is None:
                 f.write(f"\nModel = {args.model_name}, batch size = {args.batch_size}")
             else:
@@ -149,21 +166,41 @@ if __name__ == '__main__':
         f.write(f"Train from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
                 f"{int(args.train_day_end)}/{int(args.train_month_end)}/{int(args.train_year_end)}. Idxs from {train_start_idx} to {train_end_idx}.")
 
-    with open(args.input_path+args.target_file, 'rb') as f:
-        target_train = pickle.load(f)
-
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
 
     low_high_graph['low'].x = low_high_graph['low'].x[:,train_start_idx:train_end_idx,:]
 
     if args.model_type == 'reg':
-        with open(args.input_path+"reg_weights.pkl", 'rb') as f:
-            weights_reg = pickle.load(f)
-        dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
+        with open(args.input_path+args.target_file_reg, 'rb') as f:
+            target_train = pickle.load(f)
+        if args.weights_file is not None:
+            with open(args.input_path+args.weights_file, 'rb') as f:
+                weights_reg = pickle.load(f)
+            dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
                             w=weights_reg[:,train_start_idx:train_end_idx], graph=low_high_graph)
+        else:
+            dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
+                            graph=low_high_graph)
     elif args.model_type == "cl":
-        dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx], graph=low_high_graph)
+        with open(args.input_path+args.target_file_cl, 'rb') as f:
+            target_train = pickle.load(f)
+        dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
+                            graph=low_high_graph)
+    elif args.model_type == "combined":
+        with open(args.input_path+args.target_file_reg, 'rb') as f:
+            target_train_reg = pickle.load(f)
+        with open(args.input_path+args.target_file_cl, 'rb') as f:
+            target_train_cl = pickle.load(f)
+        if args.weights_file is not None:
+            with open(args.input_path+args.weights_file, 'rb') as f:
+                weights_reg = pickle.load(f)
+            dataset_graph = Dataset_Graph_Combined(targets_cl=target_train_cl[:,train_start_idx:train_end_idx],
+                            targets_reg=target_train_reg[:,train_start_idx:train_end_idx],
+                            w=weights_reg[:,train_start_idx:train_end_idx], graph=low_high_graph)
+            dataset_graph = Dataset_Graph_Combined(targets_cl=target_train_cl[:,train_start_idx:train_end_idx],
+                            targets_reg=target_train_reg[:,train_start_idx:train_end_idx],
+                            graph=low_high_graph)
 
     custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
         
@@ -182,6 +219,18 @@ if __name__ == '__main__':
 #------------------ LOAD PARAMETERS ------------------
 #-----------------------------------------------------
 
+    epoch_start=0
+    
+    if args.ctd_training:
+        if accelerator is None:
+            checkpoint = torch.load(args.checkpoint, map_location=torch.device('cpu'))
+        else:
+            checkpoint = torch.load(args.checkpoint_ctd)
+        model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
+                        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        epoch_start = checkpoint["epoch"] + 1
+
     #check_freezed_layers(model, args.output_path, args.log_file, accelerator)
 
     #total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -190,21 +239,28 @@ if __name__ == '__main__':
     #        f.write(f"\nTotal number of trainable parameters: {total_params}.")
 
     if accelerator is not None:
-        model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
+        if args.model_type == "combined":
+            model, optimizer, dataloader, loss_fn_cl, loss_fn_reg = accelerator.prepare(model, optimizer, dataloader, loss_fn_cl, loss_fn_reg)
+        elif args.model_type == "cl":
+            model, optimizer, dataloader, loss_fn_cl = accelerator.prepare(model, optimizer, dataloader, loss_fn_cl)
+        elif args.model_type == "reg":
+            model, optimizer, dataloader, loss_fn_reg = accelerator.prepare(model, optimizer, dataloader, loss_fn_reg)
+
     else:
         model = model.cuda()
 
+    if args.ctd_training:
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
+    else:
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
 #-----------------------------------------------------
 #----------------------- TRAIN -----------------------
 #-----------------------------------------------------
 
-    epoch_start=0
-
     start = time.time()
 
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
     trainer = Trainer()
-    trainer.train(model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
+    trainer.train(model, dataloader, optimizer, loss_fn_cl, loss_fn_reg, lr_scheduler, accelerator, args, epoch_start=epoch_start)
         
     end = time.time()
 
