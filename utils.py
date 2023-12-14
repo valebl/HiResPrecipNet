@@ -184,13 +184,14 @@ class Trainer(object):
         start = time.time()
         step = 0 
         for graph in dataloader:
-            if graph['high'].train_mask.sum().item() == 0:
+            train_mask = graph['high'].train_mask
+            if train_mask.sum().item() == 0:
                 continue
             optimizer.zero_grad()
-            y_pred = model(graph).squeeze()[graph['high'].train_mask]
-            y = graph['high'].y[graph['high'].train_mask]
+            y_pred = model(graph).squeeze()[train_mask]
+            y = graph['high'].y[train_mask]
             loss = loss_fn(y_pred, y)
-            #w = graph['high'].w[graph['high'].train_mask]
+            #w = graph['high'].w[train_mask]
             #loss = loss_fn(y_pred, y, w)
             accelerator.backward(loss)
             torch.nn.utils.clip_grad_norm_(model.parameters(),5)

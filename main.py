@@ -137,21 +137,6 @@ if __name__ == '__main__':
     else:
         loss_fn_reg = None
     
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"\nStarting with pct_trainset={args.pct_trainset}, lr={args.lr}, "+
-                f"weight decay = {args.weight_decay} and epochs={args.epochs}." + 
-                f"loss cl: {loss_fn_cl} and loss reg: {loss_fn_reg}") 
-            if accelerator is None:
-                f.write(f"\nModel = {args.model_name}, batch size = {args.batch_size}")
-            else:
-                f.write(f"\nModel = {args.model_name}, batch size = {args.batch_size*torch.cuda.device_count()}")
-
-    #-- define the optimizer and trainable parameters
-    if not args.fine_tuning:
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.weight_decay)
-    else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
 #-----------------------------------------------------
 #-------------- DATASET AND DATALOADER ---------------
@@ -174,14 +159,16 @@ if __name__ == '__main__':
     if args.model_type == 'reg':
         with open(args.input_path+args.target_file_reg, 'rb') as f:
             target_train = pickle.load(f)
-        if args.weights_file is not None:
-            with open(args.input_path+args.weights_file, 'rb') as f:
-                weights_reg = pickle.load(f)
-            dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
-                            w=weights_reg[:,train_start_idx:train_end_idx], graph=low_high_graph)
-        else:
-            dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
-                            graph=low_high_graph)
+        #try: 
+        #    open(args.input_path+args.weights_file, 'rb') as f:
+        #        weights_reg = pickle.load(f)
+        #    dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
+        #                    w=weights_reg[:,train_start_idx:train_end_idx], graph=low_high_graph)
+        #except:
+        #    with open(args.input_path+args.graph_file, 'rb') as f:
+        #        f.write("Not using weights in the loss.")
+        dataset_graph = Dataset_Graph(targets=target_train[:,train_start_idx:train_end_idx],
+                graph=low_high_graph)
     elif args.model_type == "cl":
         with open(args.input_path+args.target_file_cl, 'rb') as f:
             target_train = pickle.load(f)
@@ -228,8 +215,16 @@ if __name__ == '__main__':
             checkpoint = torch.load(args.checkpoint_ctd)
         model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
                         net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        epoch_start = checkpoint["epoch"] + 1
+        #epoch_start = checkpoint["epoch"] + 1
+
+    #-- define the optimizer and trainable parameters
+    if not args.fine_tuning:
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    
+    #if args.ctd_training:
+    #    optimizer.load_state_dict(checkpoint["optimizer"]
 
     #check_freezed_layers(model, args.output_path, args.log_file, accelerator)
 
@@ -250,12 +245,23 @@ if __name__ == '__main__':
         model = model.cuda()
 
     if args.ctd_training:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
+        #lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=-1)
     else:
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
 #-----------------------------------------------------
 #----------------------- TRAIN -----------------------
 #-----------------------------------------------------
+
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"\nStarting with pct_trainset={args.pct_trainset}, lr={args.lr}, "+
+                f"weight decay = {args.weight_decay} and epochs={args.epochs}." + 
+                f"loss cl: {loss_fn_cl} and loss reg: {loss_fn_reg}") 
+            if accelerator is None:
+                f.write(f"\nModel = {args.model_name}, batch size = {args.batch_size}")
+            else:
+                f.write(f"\nModel = {args.model_name}, batch size = {args.batch_size*torch.cuda.device_count()}")
 
     start = time.time()
 
