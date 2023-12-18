@@ -9,6 +9,65 @@ from torch_geometric.transforms import ToDevice
 
 from datetime import datetime, date
 
+import torch
+import torch.nn.functional as F
+
+#from torch._C import _log_api_usage_once
+
+def sigmoid_focal_loss(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    alpha: float = 0.25,
+    gamma: float = 2,
+    reduction: str = "none",
+) -> torch.Tensor:
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+
+    Args:
+        inputs (Tensor): A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets (Tensor): A float tensor with the same shape as inputs. Stores the binary
+                classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        alpha (float): Weighting factor in range (0,1) to balance
+                positive vs negative examples or -1 for ignore. Default: ``0.25``.
+        gamma (float): Exponent of the modulating factor (1 - p_t) to
+                balance easy vs hard examples. Default: ``2``.
+        reduction (string): ``'none'`` | ``'mean'`` | ``'sum'``
+                ``'none'``: No reduction will be applied to the output.
+                ``'mean'``: The output will be averaged.
+                ``'sum'``: The output will be summed. Default: ``'none'``.
+    Returns:
+        Loss tensor with the reduction option applied.
+    """
+    # Original implementation from https://github.com/facebookresearch/fvcore/blob/master/fvcore/nn/focal_loss.py
+
+    #if not torch.jit.is_scripting() and not torch.jit.is_tracing():
+    #    _log_api_usage_once(sigmoid_focal_loss)
+    #p = torch.sigmoid(inputs)
+    #ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    ce_loss = F.binary_cross_entropy(inputs, targets, reduction="none")
+    p_t = inputs * targets + (1 - inputs) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+
+    # Check reduction option and return loss accordingly
+    if reduction == "none":
+        pass
+    elif reduction == "mean":
+        loss = loss.mean()
+    elif reduction == "sum":
+        loss = loss.sum()
+    else:
+        raise ValueError(
+            f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction modes: 'none', 'mean', 'sum'"
+        )
+    return loss
+
 
 def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_end,
                  first_year, first_month=1, first_day=1):
@@ -147,15 +206,21 @@ class Trainer(object):
         start = time.time()
         step = 0
         for graph in dataloader:
-            if graph["high"].train_mask.sum().item() == 0:
+            train_mask = graph["high"].train_mask
+            if train_mask.sum().item() == 0:
                 continue
             optimizer.zero_grad()
+            # Get the prediction
             y_pred = model(graph).squeeze()[graph['high'].train_mask]
+            y_pred = torch.sigmoid(y_pred)
+            # Get the ground truth
             y = graph['high'].y[graph['high'].train_mask]
+            # Loss and optimizer step
             loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
             accelerator.backward(loss)
             torch.nn.utils.clip_grad_norm_(model.parameters(),5)
             optimizer.step()
+            # Metrics
             loss_meter.update(val=loss.item(), n=1)    
             performance = accuracy_binary_one(y_pred, y)
             acc_class1 = accuracy_binary_one_class1(y_pred, y)
@@ -190,50 +255,9 @@ class Trainer(object):
             optimizer.zero_grad()
             y_pred = model(graph).squeeze()[train_mask]
             y = graph['high'].y[train_mask]
-            loss = loss_fn(y_pred, y)
-            #w = graph['high'].w[train_mask]
-            #loss = loss_fn(y_pred, y, w)
-            accelerator.backward(loss)
-            torch.nn.utils.clip_grad_norm_(model.parameters(),5)
-            optimizer.step()
-            loss_meter.update(val=loss.item(), n=1)    
-            accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg, 'step':step})
-            step += 1
-            if accelerator.is_main_process:
-                if step % 5000 == 0:
-                    checkpoint_dict = {
-                        "parameters": model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "epoch": epoch,
-                        }
-                    torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}_tmp.pth")
-        end = time.time()
-        accelerator.log({'loss epoch': loss_meter.avg})
-        if accelerator.is_main_process:
-            with open(args.output_path+args.log_file, 'a') as f:
-                f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
-
-
-    def _train_epoch_combined(self, epoch, model, dataloader, optimizer, loss_fn_cl, loss_fn_reg, accelerator, args, alpha=0.9, gamma=2, theta=0.9):
-        loss_meter = AverageMeter()
-        start = time.time()
-        step = 0 
-        for graph in dataloader:
-            train_mask = graph['high'].train_mask
-            if train_mask.sum().item() == 0:
-                continue
-            optimizer.zero_grad()
-            y_pred_cl, y_pred_reg = model(graph)
-            # cl
-            y_pred_cl = y_pred_cl.squeeze()[train_mask]
-            y_pred_cl = torch.sigmoid(y_pred_cl)
-            y_cl = graph['high'].y_cl[train_mask]
-            # reg
-            y_pred_reg = y_pred_reg.squeeze()[train_mask] * y_pred_cl
-            y_reg = graph['high'].y_reg[train_mask]
+            #loss = loss_fn(y_pred, y)
             w = graph['high'].w[train_mask]
-            # combine
-            loss = theta * loss_fn_cl(y_pred_cl, y_cl, alpha, gamma, reduction='mean') + (1-theta) * loss_fn_reg(y_pred_reg, y_reg, w)
+            loss = loss_fn(y_pred, y, w)
             accelerator.backward(loss)
             torch.nn.utils.clip_grad_norm_(model.parameters(),5)
             optimizer.step()
@@ -253,21 +277,20 @@ class Trainer(object):
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
+
     
-    def train(self, model, dataloader, optimizer, loss_fn_cl, loss_fn_reg, lr_scheduler, accelerator, args, epoch_start=0):
+    def train(self, model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         model.train()
         for epoch in range(epoch_start, epoch_start+args.epochs):
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
             if args.model_type == 'reg':
-                self._train_epoch_reg(epoch, model, dataloader, optimizer, loss_fn_reg, accelerator, args)
+                self._train_epoch_reg(epoch, model, dataloader, optimizer, loss_fn, accelerator, args)
             elif args.model_type == 'cl':
-                self._train_epoch_cl(epoch, model, dataloader, optimizer, loss_fn_cl, accelerator, args)
-            elif args.model_type == 'combined':
-                self._train_epoch_combined(epoch, model, dataloader, optimizer, loss_fn_cl, loss_fn_reg, accelerator, args)
+                self._train_epoch_cl(epoch, model, dataloader, optimizer, loss_fn, accelerator, args)
             
-            if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.000001:
+            if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
                 lr_scheduler.step()
             if accelerator.is_main_process:
                 checkpoint_dict = {
@@ -303,24 +326,6 @@ class Tester(object):
                 #low_high_graph.pr_cl[:,graph.t] = torch.argmax(y_pred_cl, dim=-1).unsqueeze(-1).float().cpu()
                 #low_high_graph.pr_cl[:,graph.t] = y_pred_cl.unsqueeze(-1).cpu()
                 
-                if step % 100 == 0:
-                    with open(args.output_path+args.log_file, 'a') as f:
-                        f.write(f"\nStep {step} done.")
-                step += 1 
-        low_high_graph["pr"] = low_high_graph.pr_cl * low_high_graph.pr_reg 
-        return
-
-    def test_combined(self, model, dataloader,low_high_graph, args, accelerator=None):
-        model.eval()
-        step = 0
-        with torch.no_grad():    
-            for graph in dataloader:
-                # cl
-                y_pred_cl, y_pred_reg = model(graph)
-                y_pred_cl = torch.sigmoid(y_pred_cl)
-                low_high_graph.pr_cl[:,graph.t] = torch.where(y_pred_cl > 0.5, 1.0, 0.0).cpu()
-                y_pred_reg = torch.expm1(y_pred_reg * y_pred_cl)
-                low_high_graph.pr_reg[:,graph.t] = torch.where(y_pred_reg >= 0.1, y_pred_reg, torch.tensor(0.0, dtype=y_pred_reg.dtype)).cpu()
                 if step % 100 == 0:
                     with open(args.output_path+args.log_file, 'a') as f:
                         f.write(f"\nStep {step} done.")
