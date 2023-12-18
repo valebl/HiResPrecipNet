@@ -169,6 +169,25 @@ def derive_edge_indexes(lon_radius, lat_radius, lon_n1 ,lat_n1, lon_n2, lat_n2):
     return edge_indexes
 
 
+def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9):
+    
+    edge_index = []
+
+    lonlat_n1 = torch.concatenate((lon_n1.unsqueeze(-1), lat_n1.unsqueeze(-1)),dim=-1)
+    lonlat_n2 = torch.concatenate((lon_n2.unsqueeze(-1), lat_n2.unsqueeze(-1)),dim=-1)
+
+    dist = torch.cdist(lonlat_n2, lonlat_n1, p=2)
+    _ , knn = dist.topk(n_knn, largest=False, dim=-1)
+
+    for n_n2 in range(lonlat_n2.shape[0]):
+        for n_n1 in knn[n_n2,:]:
+            edge_index.append(torch.tensor([n_n1, n_n2]))
+
+    edge_index = torch.stack(edge_index)
+
+    return edge_index
+    
+
 if __name__ == '__main__':
 
     ######################################################
@@ -400,8 +419,8 @@ if __name__ == '__main__':
     edges_high = derive_edge_indexes(lon_radius=args.lon_grid_radius_high, lat_radius=args.lat_grid_radius_high,
                                   lon_n1=lon_high, lat_n1=lat_high, lon_n2=lon_high, lat_n2=lat_high)
     
-    edges_low2high = derive_edge_indexes(lon_radius=args.lon_grid_radius_low2high, lat_radius=args.lat_grid_radius_low2high,
-                                  lon_n1=lon_low, lat_n1=lat_low, lon_n2=lon_high, lat_n2=lat_high)
+    edges_low2high = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
+                                  lon_n2=lon_high, lat_n2=lat_high)
     
 
     #-----------------------------------------------------
