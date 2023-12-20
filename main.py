@@ -1,7 +1,7 @@
 from torch_geometric.data import HeteroData
 import torch
 from torch import nn
-import torchvision.ops.focal_loss
+import torchvision.ops
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
@@ -97,7 +97,7 @@ if __name__ == '__main__':
     os.environ['WANDB_CONFIG_DIR']='./wandb/'
 
     accelerator.init_trackers(
-        project_name=args.wandb_project_name
+            project_name=args.wandb_project_name
         )
 
     if accelerator is None or accelerator.is_main_process:
@@ -115,7 +115,7 @@ if __name__ == '__main__':
 
     # Loss
     if args.loss_fn == 'sigmoid_focal_loss':
-        loss_fn = getattr(utils, args.loss_fn)
+        loss_fn = getattr(torchvision.ops, args.loss_fn)
     elif args.loss_fn == 'weighted_cross_entropy_loss':
         loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.1,1]))
     elif args.loss_fn == 'weighted_mse_loss':

@@ -21,7 +21,7 @@ echo $lat_max_era5
 
 ## slice each file to the desired lon and lat window
 for v in 'q' 't' 'u' 'v' 'z' ; do
-	files=$(ls ${v}_*.nc)
+	files=$(ls $*_{v}.nc)
 	for file in $files ; do
 		cdo sellonlatbox,$lon_min_era5,$lon_max_era5,$lat_min_era5,$lat_max_era5 "${INPUT_PATH_PHASE_1A}${file}" "${OUTPUT_PATH}${PREFIX}${file}"
 	done
