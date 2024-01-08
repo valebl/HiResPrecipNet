@@ -1,6 +1,7 @@
 import time
 import sys
 import pickle
+import torch.nn as nn
 
 import torch
 
@@ -12,6 +13,32 @@ from datetime import datetime, date
 import torch
 import torch.nn.functional as F
 
+class PolyLoss(nn.Module):
+    
+    def __init__(self, epsilon = [2], N = 1):
+        # By default use poly1 loss with epsilon1 = 2
+        super().__init__()
+        self.epsilon = epsilon
+        self.N = N
+    
+    def forward(self, pred_logits, target):
+        # Get probabilities from logits
+        probas = torch.nn.functional.softmax(pred_logits, dim = -1)
+        
+        # Pick out the probabilities of the actual class
+        pt = probas[range(pred_logits.shape[0]), target]
+
+        # Compute the plain cross entropy
+        ce_loss = -1 * torch.log(pt)
+        
+        # Compute the contribution of the poly loss
+        poly_loss = 0
+        for j in range(self.N, self.N + 1):
+            poly_loss += self.epsilon[j - 1] * ((1 - pt) ** j) / j
+        
+        loss = ce_loss + poly_loss
+        
+        return torch.nanmean(loss)
 
 def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_end,
                  first_year, first_month=1, first_day=1):
@@ -87,7 +114,7 @@ def accuracy_binary_two(prediction, target):
     return acc
 
 def accuracy_binary_two_class1(prediction, target):
-    prediction = torch.nn.functional.softmax(prediction)
+    prediction = torch.nn.functional.softmax(prediction, dim=-1)
     prediction_class = torch.argmax(prediction, dim=-1).squeeze()
     correct_items = (prediction_class == target)[target==1.0]
     if correct_items.shape[0] > 0:
@@ -143,7 +170,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 
 class Trainer(object):
 
-    def _train_epoch_cl(self, epoch, model, dataloader, optimizer, loss_fn, accelerator, args, alpha=0.75, gamma=2):
+    def _train_epoch_cl(self, epoch, model, dataloader, optimizer, loss_fn, accelerator, args, alpha=0.75, gamma=0):
         loss_meter = AverageMeter()
         performance_meter = AverageMeter()
         acc_class1_meter = AverageMeter()
@@ -155,19 +182,21 @@ class Trainer(object):
                 continue
             optimizer.zero_grad()
             # Get the prediction
-            y_pred = model(graph).squeeze()[graph['high'].train_mask]
+            y_pred = model(graph)[train_mask]
+            #y_pred = model(graph).squeeze()[train_mask]
             #y_pred = torch.sigmoid(y_pred)
             # Get the ground truth
-            y = graph['high'].y[graph['high'].train_mask]
+            y = graph['high'].y[train_mask]
             # Loss and optimizer step
-            loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+            #loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+            loss = loss_fn(y_pred, y.to(torch.int64))
             accelerator.backward(loss)
             torch.nn.utils.clip_grad_norm_(model.parameters(),5)
             optimizer.step()
             # Metrics
             loss_meter.update(val=loss.item(), n=1)    
-            performance = accuracy_binary_one(y_pred, y)
-            acc_class1 = accuracy_binary_one_class1(y_pred, y)
+            performance = accuracy_binary_two(y_pred, y)
+            acc_class1 = accuracy_binary_two_class1(y_pred, y)
             performance_meter.update(val=performance, n=1)
             acc_class1_meter.update(val=acc_class1, n=1)
             accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'accuracy iteration': performance_meter.val, 'loss avg': loss_meter.avg,
@@ -256,14 +285,17 @@ class Tester(object):
         with torch.no_grad():    
             for graph in dataloader:
 
-                y_pred_reg = model_reg(graph)
+                y_pred_reg = model_reg(graph).cpu()
                 y_pred_reg = torch.expm1(y_pred_reg)
-                low_high_graph.pr_reg[:,graph.t] = torch.where(y_pred_reg >= 0.1, y_pred_reg, torch.tensor(0.0, dtype=y_pred_reg.dtype)).cpu()
+                low_high_graph.pr_reg[:,graph.t] = torch.where(y_pred_reg >= 0.1, y_pred_reg, 0.0)
+                low_high_graph.pr_reg[:,graph.t][torch.isnan(y_pred_reg)] = torch.nan
                 #low_high_graph.pr_reg[:,graph.t] = y_pred_reg.unsqueeze(-1).cpu()
 
-                y_pred_cl = model_cl(graph)
+                y_pred_cl = model_cl(graph).cpu()
                 #y_pred_cl = torch.sigmoid(y_pred_cl)
-                low_high_graph.pr_cl[:,graph.t] = torch.where(y_pred_cl > 0.0, 1.0, 0.0).cpu()
+                low_high_graph.pr_cl[:,graph.t] = torch.where(y_pred_cl > 0.0, 1.0, 0.0)
+                low_high_graph.pr_cl[:,graph.t][torch.isnan(y_pred_cl)] = torch.nan
+                #low_high_graph.pr_cl[:,graph.t] = torch.argmax(y_pred_cl, dim=-1).unsqueeze(-1).float().cpu()
                 #low_high_graph.pr_cl[:,graph.t] = y_pred_cl.cpu()
                 
                 #y_pred_cl = torch.nn.functional.softmax(y_pred_cl)
@@ -275,5 +307,6 @@ class Tester(object):
                         f.write(f"\nStep {step} done.")
                 step += 1 
         low_high_graph["pr"] = low_high_graph.pr_cl * low_high_graph.pr_reg 
+        #low_high_graph["pr"] = torch.where(y_pred_cl > 0.0, 1.0, 0.0).cpu() * low_high_graph.pr_reg 
         return
 

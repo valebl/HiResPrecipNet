@@ -117,11 +117,14 @@ if __name__ == '__main__':
     if args.loss_fn == 'sigmoid_focal_loss':
         loss_fn = getattr(torchvision.ops, args.loss_fn)
     elif args.loss_fn == 'weighted_cross_entropy_loss':
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.1,1]))
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.1, 1]))
     elif args.loss_fn == 'weighted_mse_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'quantile_loss':
         loss_fn = getattr(utils, args.loss_fn) 
+    elif args.loss_fn == 'poly_loss':
+        loss_fn = getattr(utils, "PolyLoss")
+        loss_fn = loss_fn()
     else:
         loss_fn = getattr(nn.functional, args.loss_fn) 
     
@@ -180,19 +183,18 @@ if __name__ == '__main__':
     epoch_start=0
     
     if args.ctd_training:
-        if accelerator is None:
-            checkpoint = torch.load(args.checkpoint, map_location=torch.device('cpu'))
-        else:
-            checkpoint = torch.load(args.checkpoint_ctd)
+        if accelerator is None or accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write("Continuing the training.")
+        checkpoint = torch.load(args.checkpoint_ctd)
         model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
-                        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
+            net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
         epoch_start = checkpoint["epoch"] + 1
 
     #-- define the optimizer and trainable parameters
-    if not args.fine_tuning:
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.weight_decay)
-    else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.ctd_training:
+        optimizer.load_state_dict(checkpoint["optimizer"])
     
     #if args.ctd_training:
     #    optimizer.load_state_dict(checkpoint["optimizer"]
@@ -207,18 +209,18 @@ if __name__ == '__main__':
     if accelerator is not None:
         model, optimizer, dataloader, loss_fn = accelerator.prepare(model, optimizer, dataloader, loss_fn)
         if accelerator.is_main_process:
-            with open(args.output_path+args.log_file, 'w') as f:
+            with open(args.output_path+args.log_file, 'a') as f:
                 f.write("Using accelerator to prepare model, optimizer, dataloader and loss_fn...")
     else:
-        with open(args.output_path+args.log_file, 'w') as f:
+        with open(args.output_path+args.log_file, 'a') as f:
             f.write("Not using accelerator to prepare model, optimizer, dataloader and loss_fn...")
         model = model.cuda()
 
     if args.ctd_training:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1, last_epoch=epoch_start)
         #lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=-1)
     else:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1)
 #-----------------------------------------------------
 #----------------------- TRAIN -----------------------
 #-----------------------------------------------------
