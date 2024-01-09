@@ -43,7 +43,7 @@ class Low_to_high_layer(nn.Module):
 
 class HiResPrecipNet(nn.Module):
     
-    def __init__(self, low_in=25*5*5, high_in=0, low_out=512, low2high_out=256, high_out=256):
+    def __init__(self, low_in=25*5*5, high_in=0, low_out=512, low2high_out=128, high_out=128):
         super(HiResPrecipNet, self).__init__()
 
         self.low2high = GATv2Conv((low_out,high_in), out_channels=low2high_out, dropout=0, heads=1, aggr='mean', add_self_loops=False, bias=False)
@@ -83,7 +83,7 @@ class HiResPrecipNet(nn.Module):
 
 class HiResPrecipNet_wce(HiResPrecipNet):
     
-    def __init__(self, low_in=25*5*5, high_in=0, low_out=512, low2high_out=256, high_out=256):
+    def __init__(self, low_in=25*5*5, high_in=0, low_out=512, low2high_out=128, high_out=128):
         super(HiResPrecipNet_wce, self).__init__()
         
         self.high_net = geometric_nn.Sequential('x, edge_index', [
