@@ -285,22 +285,23 @@ class Tester(object):
         with torch.no_grad():    
             for graph in dataloader:
 
+                t = graph.t.cpu()
                 y_pred_reg = model_reg(graph).cpu()
                 y_pred_reg = torch.expm1(y_pred_reg)
-                low_high_graph.pr_reg[:,graph.t] = torch.where(y_pred_reg >= 0.1, y_pred_reg, 0.0)
-                low_high_graph.pr_reg[:,graph.t][torch.isnan(y_pred_reg)] = torch.nan
+                low_high_graph.pr_reg[:,t] = torch.where(y_pred_reg >= 0.1, y_pred_reg, 0.0)
+                low_high_graph.pr_reg[:,t][y_pred_reg.isnan()] = torch.nan
                 #low_high_graph.pr_reg[:,graph.t] = y_pred_reg.unsqueeze(-1).cpu()
 
                 y_pred_cl = model_cl(graph).cpu()
-                #y_pred_cl = torch.sigmoid(y_pred_cl)
-                low_high_graph.pr_cl[:,graph.t] = torch.where(y_pred_cl > 0.0, 1.0, 0.0)
-                low_high_graph.pr_cl[:,graph.t][torch.isnan(y_pred_cl)] = torch.nan
-                #low_high_graph.pr_cl[:,graph.t] = torch.argmax(y_pred_cl, dim=-1).unsqueeze(-1).float().cpu()
-                #low_high_graph.pr_cl[:,graph.t] = y_pred_cl.cpu()
-                
-                #y_pred_cl = torch.nn.functional.softmax(y_pred_cl)
-                #low_high_graph.pr_cl[:,graph.t] = torch.argmax(y_pred_cl, dim=-1).unsqueeze(-1).float().cpu()
-                #low_high_graph.pr_cl[:,graph.t] = y_pred_cl.unsqueeze(-1).cpu()
+                #-- (weighted) cross entropy loss ->
+                y_pred_cl = torch.nn.functional.softmax(y_pred_cl, dim=-1)
+                y_pred_cl = torch.argmax(y_pred_cl, dim=-1).unsqueeze(-1).float()
+                low_high_graph.pr_cl[:,t] = y_pred_cl
+                #-- <-
+                #-- sigmoid focal loss ->
+                #low_high_graph.pr_cl[:,t] = torch.where(y_pred_cl >= 0.0, 1.0, 0.0)
+                #-- <-
+                low_high_graph.pr_cl[:,t][y_pred_cl.isnan()] = torch.nan
                 
                 if step % 100 == 0:
                     with open(args.output_path+args.log_file, 'a') as f:
