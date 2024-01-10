@@ -13,32 +13,8 @@ from datetime import datetime, date
 import torch
 import torch.nn.functional as F
 
-class PolyLoss(nn.Module):
-    
-    def __init__(self, epsilon = [2], N = 1):
-        # By default use poly1 loss with epsilon1 = 2
-        super().__init__()
-        self.epsilon = epsilon
-        self.N = N
-    
-    def forward(self, pred_logits, target):
-        # Get probabilities from logits
-        probas = torch.nn.functional.softmax(pred_logits, dim = -1)
-        
-        # Pick out the probabilities of the actual class
-        pt = probas[range(pred_logits.shape[0]), target]
+from sklearn.metrics import confusion_matrix
 
-        # Compute the plain cross entropy
-        ce_loss = -1 * torch.log(pt)
-        
-        # Compute the contribution of the poly loss
-        poly_loss = 0
-        for j in range(self.N, self.N + 1):
-            poly_loss += self.epsilon[j - 1] * ((1 - pt) ** j) / j
-        
-        loss = ce_loss + poly_loss
-        
-        return torch.nanmean(loss)
 
 def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_end,
                  first_year, first_month=1, first_day=1):
@@ -215,7 +191,7 @@ class Trainer(object):
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}; "+
-                    f"performance: {performance_meter.avg:.4f}.")
+                        f"performance: {performance_meter.avg:.4f}; perfomance class 1: {acc_class1_meter.avg:.4f}.")
 
     def _train_epoch_reg(self, epoch, model, dataloader, optimizer, loss_fn, accelerator, args):
         loss_meter = AverageMeter()
