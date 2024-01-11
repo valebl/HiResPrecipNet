@@ -13,8 +13,6 @@ from datetime import datetime, date
 import torch
 import torch.nn.functional as F
 
-from sklearn.metrics import confusion_matrix
-
 
 def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_end,
                  first_year, first_month=1, first_day=1):

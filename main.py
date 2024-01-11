@@ -117,7 +117,7 @@ if __name__ == '__main__':
     if args.loss_fn == 'sigmoid_focal_loss':
         loss_fn = getattr(torchvision.ops, args.loss_fn)
     elif args.loss_fn == 'weighted_cross_entropy_loss':
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.15, 0.85]))
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.20, 0.80]))
     elif args.loss_fn == 'weighted_mse_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'quantile_loss':
