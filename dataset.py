@@ -96,8 +96,8 @@ class Dataset_Graph(Dataset):
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
 
-        snapshot['low'].x = x_low
-        #snapshot['high'].x = None #self.graph['high'].x
+        snapshot['low'].x = x_low 
+        #snapshot['high'].x = self.graph['high'].x
         snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
 
@@ -132,66 +132,6 @@ class Dataset_Graph(Dataset):
         s['node_idx'] = node_idx
         
         return s
-
-class Dataset_Graph_Combined(Dataset_Graph):
-    def __init__(
-        self,
-        graph: Graph,
-        targets_cl: Targets,
-        targets_reg: Targets,
-        **kwargs: Additional_Features
-    ):
-        self.graph = graph
-        self.targets_cl = targets_cl
-        self.targets_reg = targets_reg
-        self.additional_feature_keys = []
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-            self.additional_feature_keys.append(key)
-        #self._check_temporal_consistency()
-
-    def _get_target_cl(self, time_index: int):
-        return self.targets_cl[:,time_index]    
-    
-    def _get_target_reg(self, time_index: int):
-        return self.targets_reg[:,time_index]
-
-    def __getitem__(self, time_index: int):
-        x_low = self._get_features(time_index)
-        y_cl = self._get_target_cl(time_index) if self.targets_cl is not None else None
-        y_reg = self._get_target_reg(time_index) if self.targets_reg is not None else None
-        train_mask = self._get_train_mask(y_cl) if y_cl is not None else None
-
-        additional_features = self._get_additional_features(time_index)
-
-        snapshot = HeteroData()
-
-        for key, value in additional_features.items():
-            if value.shape[0] == self.graph['high'].x.shape[0]:
-                snapshot['high'][key] = value
-            elif value.shape[0] == self.graph['low'].x.shape[0]:
-                snapshot['high'][key] = value
-        
-        snapshot['high'].y_cl = y_cl
-        snapshot['high'].y_reg = y_reg
-        snapshot['high'].train_mask = train_mask
-        snapshot.num_nodes = self.graph.num_nodes
-        snapshot.t = time_index
-
-        snapshot['low'].x = x_low
-        snapshot['high'].x = self.graph['high'].x
-        snapshot['high'].z_std = self.graph['high'].z_std
-
-        snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
-        snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
-        snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
-
-        snapshot['high'].lon = self.graph['high'].lon
-        snapshot['high'].lat = self.graph['high'].lat
-        snapshot['low'].lon = self.graph['low'].lon
-        snapshot['low'].lat = self.graph['low'].lat
-
-        return snapshot
 
 
 class Iterable_Graph(object):

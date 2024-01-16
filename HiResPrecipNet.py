@@ -176,7 +176,7 @@ class HiResPrecipNet_wce_old(HiResPrecipNet):
     def forward(self, data):
         
         encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
-        encod_high = self.low2high((encod_low, None), data.edge_index_dict[('low','to','high')])
+        encod_high = self.low2high((encod_low, data.x_dict['high']), data.edge_index_dict[('low','to','high')])
         encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
         y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
         return y_pred
