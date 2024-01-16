@@ -86,7 +86,7 @@ if __name__ == '__main__':
 #-----------------------------------------------------
 
     if args.use_accelerate is True:
-        accelerator = Accelerator(log_with="wandb")
+        accelerator = Accelerator(log_with="wandb", step_scheduler_with_optimizer=False)
     else:
         accelerator = None
     
@@ -202,6 +202,8 @@ if __name__ == '__main__':
 #-----------------------------------------------------
 #------------------ LOAD PARAMETERS ------------------
 #-----------------------------------------------------
+
+    #model.low2high.lin_r.weight = torch.nn.Parameter(torch.zeros((low_high_graph['high'].num_nodes,0)))
 
     epoch_start=0
     
