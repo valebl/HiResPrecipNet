@@ -43,7 +43,7 @@ class Low_to_high_layer(nn.Module):
 
 class HiResPrecipNet(nn.Module):
     
-    def __init__(self, low_in=25*5*5, high_in=0, low_out=512, low2high_out=128, high_out=128):
+    def __init__(self, low_in=5*5*5, high_in=1, low_out=512, low2high_out=128, high_out=128):
         super(HiResPrecipNet, self).__init__()
 
         self.low2high = GATv2Conv((low_out,high_in), out_channels=low2high_out, dropout=0, heads=1, aggr='mean', add_self_loops=False, bias=False)
@@ -73,7 +73,7 @@ class HiResPrecipNet(nn.Module):
     def forward(self, data):
         
         encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
-        encod_high = self.low2high((encod_low, data.x_dict['high']), data.edge_index_dict[('low','to','high')])
+        encod_high = self.low2high((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
         encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
         y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
         return y_pred
@@ -83,7 +83,7 @@ class HiResPrecipNet(nn.Module):
 
 class HiResPrecipNet_wce(HiResPrecipNet):
     
-    def __init__(self, low_in=25*5*5, high_in=0, low_out=512, low2high_out=128, high_out=128):
+    def __init__(self, low_in=5*5*5, high_in=1, low_out=512, low2high_out=128, high_out=128):
         super(HiResPrecipNet_wce, self).__init__()
         
         self.low2high = GATv2Conv((low_out,high_in), out_channels=low2high_out, dropout=0, heads=1, aggr='mean', add_self_loops=False, bias=False)
@@ -102,7 +102,81 @@ class HiResPrecipNet_wce(HiResPrecipNet):
     def forward(self, data):
         
         encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
+        encod_high = self.low2high((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
+        y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
+        return y_pred
+    
+class HiResPrecipNet_old(HiResPrecipNet):
+    
+    def __init__(self, low_in=5*5*5, high_in=0, low_out=512, low2high_out=128, high_out=128):
+        super(HiResPrecipNet_old, self).__init__()
+        
+        self.low_net = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low_in), 'x -> x'),
+            (High_within_layer(in_channels=low_in, out_channels=low_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out), 'x -> x'), 
+            nn.ReLU(),
+            (High_within_layer(in_channels=low_out, out_channels=low_out),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out), 'x -> x'),
+            nn.ReLU(),
+            (High_within_layer(in_channels=low_out, out_channels=low_out), 'x, edge_index -> x'),
+            ])
+        
+        self.low2high = GATv2Conv((low_out,high_in), out_channels=low2high_out, dropout=0, heads=1, aggr='mean', add_self_loops=False, bias=False)
+        
+        self.high_net = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (High_within_layer(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.5), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (High_within_layer(in_channels=high_out*2, out_channels=high_out),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (High_within_layer(in_channels=high_out, out_channels=1), 'x, edge_index -> x'),
+            ])
+
+    def forward(self, data):
+        
+        encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
         encod_high = self.low2high((encod_low, data.x_dict['high']), data.edge_index_dict[('low','to','high')])
+        encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
+        y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
+        return y_pred
+    
+class HiResPrecipNet_wce_old(HiResPrecipNet):
+    
+    def __init__(self, low_in=5*5*5, high_in=0, low_out=512, low2high_out=128, high_out=128):
+        super(HiResPrecipNet_wce_old, self).__init__()
+        
+        self.low_net = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low_in), 'x -> x'),
+            (High_within_layer(in_channels=low_in, out_channels=low_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out), 'x -> x'), 
+            nn.ReLU(),
+            (High_within_layer(in_channels=low_out, out_channels=low_out),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out), 'x -> x'),
+            nn.ReLU(),
+            (High_within_layer(in_channels=low_out, out_channels=low_out), 'x, edge_index -> x'),
+            ])
+        
+        self.low2high = GATv2Conv((low_out,high_in), out_channels=low2high_out, dropout=0, heads=1, aggr='mean', add_self_loops=False, bias=False, share_weights=True)
+        
+        self.high_net = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (High_within_layer(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.5), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (High_within_layer(in_channels=high_out*2, out_channels=high_out),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (High_within_layer(in_channels=high_out, out_channels=2), 'x, edge_index -> x'),
+            ])
+
+    def forward(self, data):
+        
+        encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
+        encod_high = self.low2high((encod_low, None), data.edge_index_dict[('low','to','high')])
         encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
         y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
         return y_pred

@@ -144,7 +144,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 
 class Trainer(object):
 
-    def _train_epoch_cl(self, epoch, model, dataloader, optimizer, loss_fn, accelerator, args, alpha=0.75, gamma=0):
+    def _train_epoch_cl(self, epoch, model, dataloader, optimizer, loss_fn, accelerator, args, alpha=0.75, gamma=2):
         loss_meter = AverageMeter()
         performance_meter = AverageMeter()
         acc_class1_meter = AverageMeter()
@@ -156,21 +156,34 @@ class Trainer(object):
                 continue
             optimizer.zero_grad()
             # Get the prediction
-            y_pred = model(graph)[train_mask]
+            #-- one ->
             #y_pred = model(graph).squeeze()[train_mask]
-            #y_pred = torch.sigmoid(y_pred)
+            #-- <-            
+            #-- two ->
+            y_pred = model(graph)[train_mask]
+            #-- <-
             # Get the ground truth
             y = graph['high'].y[train_mask]
             # Loss and optimizer step
+            #-- one ->
             #loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+            #-- <-
+            #-- two ->
             loss = loss_fn(y_pred, y.to(torch.int64))
+            #-- <-
             accelerator.backward(loss)
             torch.nn.utils.clip_grad_norm_(model.parameters(),5)
             optimizer.step()
             # Metrics
             loss_meter.update(val=loss.item(), n=1)    
+            #-- one ->
+            #performance = accuracy_binary_one(y_pred, y)
+            #acc_class1 = accuracy_binary_one_class1(y_pred, y)
+            #-- <-
+            #-- two ->
             performance = accuracy_binary_two(y_pred, y)
             acc_class1 = accuracy_binary_two_class1(y_pred, y)
+            #-- <-
             performance_meter.update(val=performance, n=1)
             acc_class1_meter.update(val=acc_class1, n=1)
             accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'accuracy iteration': performance_meter.val, 'loss avg': loss_meter.avg,
@@ -260,27 +273,26 @@ class Tester(object):
             for graph in dataloader:
 
                 t = graph.t.cpu()
-                y_pred_reg = model_reg(graph).cpu()
-                y_pred_reg = torch.expm1(y_pred_reg)
-                low_high_graph.pr_reg[:,t] = torch.where(y_pred_reg >= 0.1, y_pred_reg, 0.0)
-                low_high_graph.pr_reg[:,t][y_pred_reg.isnan()] = torch.nan
-                #low_high_graph.pr_reg[:,graph.t] = y_pred_reg.unsqueeze(-1).cpu()
+                
+                # Regressor
+                y_pred_reg = model_reg(graph)
+                low_high_graph.pr_reg[:,t] = torch.expm1(y_pred_reg).cpu()
 
-                y_pred_cl = model_cl(graph).cpu()
+                # Classifier
+                y_pred_cl = model_cl(graph)
                 #-- (weighted) cross entropy loss ->
-                y_pred_cl = torch.nn.functional.softmax(y_pred_cl, dim=-1)
-                y_pred_cl = torch.argmax(y_pred_cl, dim=-1).unsqueeze(-1).float()
-                low_high_graph.pr_cl[:,t] = y_pred_cl
+                low_high_graph.pr_cl[:,t] = torch.argmax(torch.nn.functional.softmax(y_pred_cl, dim=-1), dim =-1).unsqueeze(-1).float().cpu()
                 #-- <-
                 #-- sigmoid focal loss ->
                 #low_high_graph.pr_cl[:,t] = torch.where(y_pred_cl >= 0.0, 1.0, 0.0)
                 #-- <-
-                low_high_graph.pr_cl[:,t][y_pred_cl.isnan()] = torch.nan
                 
                 if step % 100 == 0:
                     with open(args.output_path+args.log_file, 'a') as f:
                         f.write(f"\nStep {step} done.")
                 step += 1 
+
+        #Comined classifier and regressor
         low_high_graph["pr"] = low_high_graph.pr_cl * low_high_graph.pr_reg 
         #low_high_graph["pr"] = torch.where(y_pred_cl > 0.0, 1.0, 0.0).cpu() * low_high_graph.pr_reg 
         return

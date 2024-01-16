@@ -16,7 +16,6 @@ import dataset
 import HiResPrecipNet as models
 import utils
 from utils import Trainer, date_to_idxs, load_checkpoint
-
 from accelerate import Accelerator
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -117,7 +116,7 @@ if __name__ == '__main__':
     if args.loss_fn == 'sigmoid_focal_loss':
         loss_fn = getattr(torchvision.ops, args.loss_fn)
     elif args.loss_fn == 'weighted_cross_entropy_loss':
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.20, 0.80]))
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.25, 0.75]))
     elif args.loss_fn == 'weighted_mse_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'quantile_loss':
@@ -138,9 +137,10 @@ if __name__ == '__main__':
                                                                       args.train_day_end, args.first_year)
     train_start_idx = max(train_start_idx,25)
     
-    with open(args.output_path+args.log_file, 'a') as f:
-        f.write(f"Train from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
-                f"{int(args.train_day_end)}/{int(args.train_month_end)}/{int(args.train_year_end)}. Idxs from {train_start_idx} to {train_end_idx}.")
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"Train from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
+                    f"{int(args.train_day_end)}/{int(args.train_month_end)}/{int(args.train_year_end)}. Idxs from {train_start_idx} to {train_end_idx}.")
 
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
@@ -160,9 +160,10 @@ if __name__ == '__main__':
         mask_all_nan.append(nan_sum < target_train.shape[0])
     mask_all_nan = torch.stack(mask_all_nan)
 
-    with open(args.output_path+args.log_file, 'a') as f:
-        f.write(f"After removing all nan time indexes, {mask_all_nan.sum()}" +
-                f" time indexes are considered ({(mask_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"After removing all nan time indexes, {mask_all_nan.sum()}" +
+                    f" time indexes are considered ({(mask_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
 
     low_high_graph['low'].x = low_high_graph['low'].x[:,mask_all_nan]
     target_train = target_train[:,mask_all_nan]
@@ -173,14 +174,16 @@ if __name__ == '__main__':
         weights_reg = weights_reg[:,train_start_idx:train_end_idx]
         weights_reg = weights_reg[:,mask_all_nan]
 
-        with open(args.output_path+args.log_file, 'a') as f:
-            f.write("Using weights in the loss.")
+        if accelerator is None or accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write("Using weights in the loss.")
 
         dataset_graph = Dataset_Graph(targets=target_train,
             w=weights_reg, graph=low_high_graph)
     else:
-        with open(args.output_path+args.log_file, 'a') as f:
-            f.write("Not using weights in the loss.")
+        if accelerator is None or accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write("Not using weights in the loss.")
         dataset_graph = Dataset_Graph(targets=target_train,
             graph=low_high_graph)
 
@@ -227,8 +230,14 @@ if __name__ == '__main__':
     #    with open(args.output_path+args.log_file, 'a') as f:
     #        f.write(f"\nTotal number of trainable parameters: {total_params}.")
 
+    if args.ctd_training:
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
+        #lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=-1)
+    else:
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
+    
     if accelerator is not None:
-        model, optimizer, dataloader, loss_fn = accelerator.prepare(model, optimizer, dataloader, loss_fn)
+        model, optimizer, dataloader, lr_scheduler, loss_fn = accelerator.prepare(model, optimizer, dataloader, lr_scheduler, loss_fn)
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write("Using accelerator to prepare model, optimizer, dataloader and loss_fn...")
@@ -237,11 +246,6 @@ if __name__ == '__main__':
             f.write("Not using accelerator to prepare model, optimizer, dataloader and loss_fn...")
         model = model.cuda()
 
-    if args.ctd_training:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
-        #lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=-1)
-    else:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
 #-----------------------------------------------------
 #----------------------- TRAIN -----------------------
 #-----------------------------------------------------

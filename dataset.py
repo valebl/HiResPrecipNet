@@ -13,6 +13,7 @@ import numpy as np
 from typing import Sequence, Union
 from torch_geometric.data import Data, Batch
 from torch_geometric.utils import k_hop_subgraph
+from torch_geometric.utils import degree
 
 Graph = Union[HeteroData,None]
 Targets = Sequence[Union[np.ndarray, None]]
@@ -46,8 +47,9 @@ class Dataset_Graph(Dataset):
     def _set_snapshot_count(self):
         self.snapshot_count = len(self)
 
-    def _get_features(self, time_index: int):
-        x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
+    def _get_features(self, time_index: int): # offset=24
+        #x_low = self.graph['low'].x[:,time_index-offset:time_index+1,:]
+        x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:]
         x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low
     
@@ -86,15 +88,18 @@ class Dataset_Graph(Dataset):
         snapshot['high'].y = y
         snapshot['high'].train_mask = train_mask
         snapshot.num_nodes = self.graph.num_nodes
+        snapshot['high'].num_nodes = self.graph['high'].num_nodes
+        snapshot['low'].num_nodes = self.graph['low'].num_nodes
         snapshot.t = time_index
-
-        snapshot['low'].x = x_low
-        snapshot['high'].x = self.graph['high'].x
-        snapshot['high'].z_std = self.graph['high'].z_std
-
+        
         snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+
+        snapshot['low'].x = x_low
+        #snapshot['high'].x = None #self.graph['high'].x
+        snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
+        snapshot['high'].z_std = self.graph['high'].z_std
 
         snapshot['high'].lon = self.graph['high'].lon
         snapshot['high'].lat = self.graph['high'].lat
