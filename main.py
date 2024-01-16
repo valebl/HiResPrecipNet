@@ -101,7 +101,6 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'w') as f:
-            f.write("Starting the training...")
             f.write(f"Cuda is available: {torch.cuda.is_available()}. There are {torch.cuda.device_count()} available GPUs.")
 
 
@@ -139,7 +138,7 @@ if __name__ == '__main__':
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"Train from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
+            f.write(f"\nTrain from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
                     f"{int(args.train_day_end)}/{int(args.train_month_end)}/{int(args.train_year_end)}. Idxs from {train_start_idx} to {train_end_idx}.")
 
     with open(args.input_path+args.graph_file, 'rb') as f:
@@ -162,7 +161,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"After removing all nan time indexes, {mask_all_nan.sum()}" +
+            f.write(f"\nAfter removing all nan time indexes, {mask_all_nan.sum()}" +
                     f" time indexes are considered ({(mask_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
 
     low_high_graph['low'].x = low_high_graph['low'].x[:,mask_all_nan]
@@ -176,14 +175,14 @@ if __name__ == '__main__':
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
-                f.write("Using weights in the loss.")
+                f.write("\nUsing weights in the loss.")
 
         dataset_graph = Dataset_Graph(targets=target_train,
             w=weights_reg, graph=low_high_graph)
     else:
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
-                f.write("Not using weights in the loss.")
+                f.write("\nNot using weights in the loss.")
         dataset_graph = Dataset_Graph(targets=target_train,
             graph=low_high_graph)
 
@@ -209,7 +208,7 @@ if __name__ == '__main__':
     if args.ctd_training:
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
-                f.write("Continuing the training.")
+                f.write("\nContinuing the training.")
         checkpoint = torch.load(args.checkpoint_ctd)
         model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
             net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
@@ -240,10 +239,10 @@ if __name__ == '__main__':
         model, optimizer, dataloader, lr_scheduler, loss_fn = accelerator.prepare(model, optimizer, dataloader, lr_scheduler, loss_fn)
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
-                f.write("Using accelerator to prepare model, optimizer, dataloader and loss_fn...")
+                f.write("\nUsing accelerator to prepare model, optimizer, dataloader and loss_fn...")
     else:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write("Not using accelerator to prepare model, optimizer, dataloader and loss_fn...")
+            f.write("\nNot using accelerator to prepare model, optimizer, dataloader and loss_fn...")
         model = model.cuda()
 
 #-----------------------------------------------------
@@ -252,7 +251,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"\nStarting with pct_trainset={args.pct_trainset}, lr={args.lr}, "+
+            f.write(f"\nUsing pct_trainset={args.pct_trainset}, lr={args.lr}, "+
                 f"weight decay = {args.weight_decay} and epochs={args.epochs}." + 
                 f"loss: {loss_fn}") 
             if accelerator is None:
@@ -263,7 +262,10 @@ if __name__ == '__main__':
     start = time.time()
 
     trainer = Trainer()
-    trainer.train(model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
+    if args.model_type == "cl":
+        trainer.train_cl(model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
+    elif args.model_type == "reg":
+        trainer.train_reg(model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)       
         
     end = time.time()
 
