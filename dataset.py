@@ -35,6 +35,7 @@ class Dataset_Graph(Dataset):
             setattr(self, key, value)
             self.additional_feature_keys.append(key)
         self._check_temporal_consistency()
+        self._add_node_degree()
 
     def __len__(self):
         #return len(self.features)
@@ -46,6 +47,9 @@ class Dataset_Graph(Dataset):
 
     def _set_snapshot_count(self):
         self.snapshot_count = len(self)
+    
+    def _add_node_degree(self):
+        self.graph['high'].deg = (degree(self.graph['high','within','high'].edge_index[0], self.graph['high'].num_nodes) / 8).unsqueeze(-1)
 
     def _get_features(self, time_index: int): # offset=24
         #x_low = self.graph['low'].x[:,time_index-offset:time_index+1,:]
@@ -103,8 +107,10 @@ class Dataset_Graph(Dataset):
 
         snapshot['high'].lon = self.graph['high'].lon
         snapshot['high'].lat = self.graph['high'].lat
+        snapshot['high'].deg = self.graph['high'].deg
         snapshot['low'].lon = self.graph['low'].lon
         snapshot['low'].lat = self.graph['low'].lat
+        
 
         return snapshot
 

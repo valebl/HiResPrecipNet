@@ -163,7 +163,7 @@ if __name__ == '__main__':
     start = time.time()
     if args.model_type == "combined":
         tester.test_combined(model, dataloader, low_high_graph=low_high_graph, args=args)
-    elif args.model_type ==  "individual":   
+    elif args.model_type == "individual":   
         tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args)
     end = time.time()
 
