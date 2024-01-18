@@ -29,6 +29,7 @@ parser.add_argument('--checkpoint_path', type=str)
 parser.add_argument('--output_file', type=str, default="G_predictions.pkl")
 
 parser.add_argument('--graph_file', type=str, default=None) 
+parser.add_argument('--target_file', type=str, default=None) 
 parser.add_argument('--model_name', type=str, default=None) 
 parser.add_argument('--model_type', type=str, default=None) 
 parser.add_argument('--loss_fn', type=str, default=None) 
@@ -164,47 +165,46 @@ if __name__ == '__main__':
         acc_class1 = []
 
     start = time.time()
+    
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write(f"\n{args.model_name}:")   
 
     for epoch in range(args.last_epoch):
 
-        if epoch == 0:
-            output = True
-        else:
-            output = False
+        output = True if epoch == 0 else False
 
         checkpoint = args.checkpoint_path + f"checkpoint_{epoch}.pth"       
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path + args.log_file, 'a') as f:
                 f.write(f"\n\nEpoch: {epoch}")            
-
-        if output and accelerator is None or accelerator.is_main_process:
-            with open(args.output_path + args.log_file, 'a') as f:
-                f.write("\n{args.model}:")    
+ 
         if accelerator is None:
             checkpoint = torch.load(checkpoint, map_location=torch.device('cpu'))
         else:
             checkpoint = torch.load(checkpoint)
-        model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None, 
+
+        model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, accelerator, 
                 net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=accelerator.device, output=output)
 
         if accelerator is not None:
-            model, dataloader, loss_fn  = accelerator.prepare(model, dataloader, loss_fn)
+            model, dataloader, loss_fn = accelerator.prepare(model, dataloader, loss_fn)
         else:
             model = model.cuda()
 
         tester = Tester()
 
         if args.model_type == "reg":
-            loss_reg_epoch, = tester.validate(model, dataloader, loss_fn)
-            loss_reg.append(loss_reg_epoch.item())
+            loss_reg_epoch, = tester.validate_reg(model, dataloader, loss_fn)
+            loss_reg.append(loss_reg_epoch)
 
         elif args.model_type == "cl":
-            loss_cl_epoch, acc_epoch, acc_class0_epoch, acc_class1_epoch = tester.validate(model, dataloader, loss_fn)
-            loss_cl.append(loss_cl_epoch.item())
-            acc.append(acc_epoch.item())
-            acc_class0.append(acc_class0_epoch.item())
-            acc_class1.append(acc_class1_epoch.item())
+            loss_cl_epoch, acc_epoch, acc_class0_epoch, acc_class1_epoch = tester.validate_cl(model, dataloader, loss_fn)
+            loss_cl.append(loss_cl_epoch)
+            acc.append(acc_epoch)
+            acc_class0.append(acc_class0_epoch)
+            acc_class1.append(acc_class1_epoch)
     
     end = time.time()
 

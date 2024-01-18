@@ -105,55 +105,35 @@ if __name__ == '__main__':
     dataloader = torch.utils.data.DataLoader(dataset_graph, batch_size=args.batch_size, num_workers=0,
                     sampler=sampler_graph, collate_fn=custom_collate_fn)
     
-    if args.model_type == "combined":
-        Model = getattr(models, args.model_combined)
-        model = Model()
-        if args.use_accelerate:
-            model, dataloader = accelerator.prepare(model, dataloader)
-        else:
-            model = model.cuda()
-        if not args.use_accelerate or accelerator.is_main_process:
-            with open(args.output_path + args.log_file, 'a') as f:
-                f.write("\Model:")    
-        if not args.use_accelerate:
-            checkpoint = torch.load(args.checkpoint, map_location=torch.device('cpu'))
-        else:
-            checkpoint = torch.load(args.checkpoint)
-        model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None, 
-                net_names=["low2high.", "low_net.", "high_net_reg.", "high_res_cl."], fine_tuning=False, device=accelerator.device)
-    elif args.model_type == "individual":
-        Model_cl = getattr(models, args.model_cl)
-        Model_reg = getattr(models, args.model_reg)
-        model_cl = Model_cl()
-        model_reg = Model_reg()
-        if args.use_accelerate:
-            model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)
-        # else:
-        #     model_cl = model_cl.cuda()
-        #     model_reg = model_reg.cuda()
-        if not args.use_accelerate or accelerator.is_main_process:
-            with open(args.output_path + args.log_file, 'a') as f:
-                f.write("\nClassifier:")    
-        if not args.use_accelerate:
-            checkpoint_cl = torch.load(args.checkpoint_cl, map_location=torch.device('cpu'))
-        else:
-            checkpoint_cl = torch.load(args.checkpoint_cl)
-        model_cl = load_checkpoint(model_cl, checkpoint_cl, args.output_path, args.log_file, None, 
-                net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=accelerator.device)
-        if accelerator is None or accelerator.is_main_process:
-            with open(args.output_path + args.log_file, 'a') as f:
-                f.write("\nRegressor:")
-        if not args.use_accelerate:
-            checkpoint_reg = torch.load(args.checkpoint_reg, map_location=torch.device('cpu'))
-        else:
-            checkpoint_reg = torch.load(args.checkpoint_reg)
-        model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, None,
-                net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=accelerator.device)
+    Model_cl = getattr(models, args.model_cl)
+    Model_reg = getattr(models, args.model_reg)
+    model_cl = Model_cl()
+    model_reg = Model_reg()
+    if accelerator is not None:
+        model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)
+
+    if accelerator is None:
+        checkpoint_cl = torch.load(args.checkpoint_cl, map_location=torch.device('cpu'))
+        checkpoint_reg = torch.load(args.checkpoint_reg, map_location=torch.device('cpu'))
+        device = 'cpu'
     else:
-        raise Exception("args.model_type should be either 'combined' or 'individual'")
+        checkpoint_cl = torch.load(args.checkpoint_cl)
+        checkpoint_reg = torch.load(args.checkpoint_reg)
+        device = accelerator.device()
+    
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write("\nClassifier:")    
+    model_cl = load_checkpoint(model_cl, checkpoint_cl, args.output_path, args.log_file, accelerator, 
+        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
+    
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write("\nRegressor:")
+    model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
+        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
 
-
-    if not args.use_accelerate or accelerator.is_main_process:
+    if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nStarting the test, from {int(args.test_day_start)}/{int(args.test_month_start)}/{int(args.test_year_start)} to " +
                     f"{int(args.test_day_end)}/{int(args.test_month_end)}/{int(args.test_year_end)}.")
@@ -161,18 +141,16 @@ if __name__ == '__main__':
     tester = Tester()
 
     start = time.time()
-    if args.model_type == "combined":
-        tester.test_combined(model, dataloader, low_high_graph=low_high_graph, args=args)
-    elif args.model_type == "individual":   
-        tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args)
+
+    tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args)
     end = time.time()
 
-    if not args.use_accelerate or accelerator.is_main_process:
+    if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nDone. Testing concluded in {end-start} seconds.")
             f.write("\nWrite the files.")
 
-    if not args.use_accelerate or accelerator.is_main_process:
+    if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.output_file, 'wb') as f:
             pickle.dump(low_high_graph, f)
 
