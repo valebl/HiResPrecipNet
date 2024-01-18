@@ -86,15 +86,6 @@ if __name__ == '__main__':
     else:
         loss_fn = getattr(nn.functional, args.loss_fn) 
 
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + args.log_file, 'w') as f:
-            f.write(f"Starting!")
-
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path+args.log_file, 'w') as f:
-            f.write("Starting the training...")
-            f.write(f"Cuda is available: {torch.cuda.is_available()}. There are {torch.cuda.device_count()} available GPUs.")
-
     test_start_idx, test_end_idx = date_to_idxs(args.test_year_start, args.test_month_start,
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year)
@@ -178,7 +169,7 @@ if __name__ == '__main__':
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path + args.log_file, 'a') as f:
-                f.write(f"\n\nEpoch: {epoch}")            
+                f.write(f"\nEpoch: {epoch}")            
  
         if accelerator is None:
             checkpoint = torch.load(checkpoint, map_location=torch.device('cpu'))
@@ -210,28 +201,24 @@ if __name__ == '__main__':
 
     if args.model_type == "reg":
         with open(args.output_path + "loss_reg.pkl", 'wb') as f:
-            pickle.dump(torch.tensor((loss_reg)))
+            pickle.dump(np.array((loss_reg)), f)
 
     elif args.model_type == "cl":
         with open(args.output_path + "loss_cl.pkl", 'wb') as f:
-            pickle.dump(torch.tensor((loss_cl)))
+            pickle.dump(np.array((loss_cl)), f)
         
         with open(args.output_path + "acc.pkl", 'wb') as f:
-            pickle.dump(torch.tensor((acc)))
+            pickle.dump(np.array((acc)), f)
         
         with open(args.output_path + "acc_class0.pkl", 'wb') as f:
-            pickle.dump(torch.tensor((acc_class0)))
+            pickle.dump(np.array((acc_class0)), f)
 
         with open(args.output_path + "acc_class1.pkl", 'wb') as f:
-            pickle.dump(torch.tensor((acc_class1)))
+            pickle.dump(np.array((acc_class1)), f)
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nDone. Validation concluded in {end-start} seconds.")
             f.write("\nWrite the files.")
-
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + args.output_file, 'wb') as f:
-            pickle.dump(low_high_graph, f)
 
         
