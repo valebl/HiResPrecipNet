@@ -156,6 +156,45 @@ class HiResPrecipNet_wce_mod(HiResPrecipNet):
         encod_high = torch.concatenate((data['high'].z_std, data['high'].deg, encod_high),dim=-1)
         y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
         return y_pred
+
+class HiResPrecipNet_mod(HiResPrecipNet):
+    
+    def __init__(self, low_in=5*5*5, high_in=1, low_out=128, low2high_out=128, high_out=128):
+        super(HiResPrecipNet_mod, self).__init__()
+        
+        self.low_net = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low_in), 'x -> x'),
+            (High_within_layer(in_channels=low_in, out_channels=low_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out), 'x -> x'), 
+            nn.ReLU(),
+            (High_within_layer(in_channels=low_out, out_channels=low_out),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out), 'x -> x'),
+            nn.ReLU(),
+            (High_within_layer(in_channels=low_out, out_channels=low_out), 'x, edge_index -> x'),
+            ])
+        
+        self.low2high = GATv2Conv((low_out,high_in), out_channels=low2high_out, dropout=0, heads=1, aggr='mean', add_self_loops=False, bias=False)
+        
+        self.high_net = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+2), 'x -> x'),
+            (High_within_layer(in_channels=low2high_out+2, out_channels=high_out, heads=1, dropout=0), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'), 
+            nn.ReLU(),
+            (High_within_layer(in_channels=high_out, out_channels=high_out),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (High_within_layer(in_channels=high_out, out_channels=high_out), 'x, edge_index -> x'),
+            nn.ReLU(),
+            nn.Linear(high_out,1)
+            ])
+
+    def forward(self, data):
+        
+        encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
+        encod_high = self.low2high((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_high = torch.concatenate((data['high'].z_std, data['high'].deg, encod_high),dim=-1)
+        y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
+        return y_pred
     
 class HiResPrecipNet_old(HiResPrecipNet):
     
@@ -189,7 +228,7 @@ class HiResPrecipNet_old(HiResPrecipNet):
     def forward(self, data):
         
         encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
-        encod_high = self.low2high((encod_low, data.x_dict['high']), data.edge_index_dict[('low','to','high')])
+        encod_high = self.low2high((encod_low, data['high'].x_empty), data.edge_index_dict[('low','to','high')])
         encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
         y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
         return y_pred
@@ -226,7 +265,7 @@ class HiResPrecipNet_wce_old(HiResPrecipNet):
     def forward(self, data):
         
         encod_low = self.low_net(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
-        encod_high = self.low2high((encod_low, data.x_dict['high']), data.edge_index_dict[('low','to','high')])
+        encod_high = self.low2high((encod_low, data['high'].x_empty), data.edge_index_dict[('low','to','high')])
         encod_high = torch.concatenate((data['high'].z_std, encod_high),dim=-1)
         y_pred = self.high_net(encod_high, data.edge_index_dict[('high','within','high')])
         return y_pred

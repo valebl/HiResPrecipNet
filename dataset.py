@@ -101,7 +101,7 @@ class Dataset_Graph(Dataset):
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
 
         snapshot['low'].x = x_low
-        #snapshot['high'].x = self.graph['high'].x
+        snapshot['high'].x_empty = self.graph['high'].x
         snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
 
