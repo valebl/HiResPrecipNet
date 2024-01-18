@@ -117,15 +117,15 @@ def weighted_mse_loss(input_batch, target_batch, weights):
 def quantile_loss(prediction_batch, target_batch, q=0.35):
     return torch.mean(torch.max(q*(prediction_batch-target_batch), (q-1)*(prediction_batch-target_batch)))
 
-def load_checkpoint(model, checkpoint, log_path, log_file, accelerator, net_names, fine_tuning=True, device=None):
-    if accelerator is None or accelerator.is_main_process:
+def load_checkpoint(model, checkpoint, log_path, log_file, accelerator, net_names, fine_tuning=True, device=None, output=True):
+    if output and accelerator is None or accelerator.is_main_process:
         with open(log_path+log_file, 'a') as f:
-            f.write("\nLoading encoder parameters.") 
+            f.write("\nLoading parameters.") 
     state_dict = checkpoint["parameters"]
     for name, param in state_dict.items():
         for net_name in net_names:
             if net_name in name:
-                if accelerator is None or accelerator.is_main_process:
+                if output and accelerator is None or accelerator.is_main_process:
                     with open(log_path+log_file, 'a') as f:
                         f.write(f"\nLoading parameters '{name}'")
                 param = param.data
@@ -134,7 +134,7 @@ def load_checkpoint(model, checkpoint, log_path, log_file, accelerator, net_name
                 try:
                     model.state_dict()[name].copy_(param)
                 except:
-                     if accelerator is None or accelerator.is_main_process:
+                     if output and accelerator is None or accelerator.is_main_process:
                         with open(log_path+log_file, 'a') as f:
                             f.write(f"\nParam {name} was not loaded..")
     #if not fine_tuning:
@@ -303,4 +303,45 @@ class Tester(object):
         low_high_graph["pr"] = low_high_graph.pr_cl * low_high_graph.pr_reg 
         #low_high_graph["pr"] = torch.where(y_pred_cl > 0.0, 1.0, 0.0).cpu() * low_high_graph.pr_reg 
         return
+    
+    
+    def validate(self, model_cl, model_reg, dataloader, loss_fn_reg, loss_fn_cl, accelerator=None):
+
+        model_cl.eval()
+        model_reg.eval()
+
+        loss_meter_cl = AverageMeter()
+        loss_meter_reg = AverageMeter()
+
+        acc_meter = AverageMeter()
+        acc_class0_meter = AverageMeter()
+        acc_class1_meter = AverageMeter()
+
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                train_mask = graph["high"].train_mask
+
+                # Regressor
+                y_pred_reg = model_reg(graph)[train_mask]
+                y_reg = graph['high'].y_reg[train_mask]
+                w = graph['high'].w[train_mask]
+                loss_reg = loss_fn_reg(y_pred_reg, y_reg, w)
+
+                loss_meter_reg.update(val=loss_reg.item(), n=1)   
+
+                # Classifier
+                y_pred_cl = model_cl(graph)[train_mask]
+                y_cl = graph['high'].y_cl[train_mask]
+                loss_cl = loss_fn_cl(y_pred_cl, y_cl.to(torch.int64))
+
+                acc = accuracy_binary_two(y_pred_cl, y_cl)
+                acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred_cl, y_cl)
+
+                loss_meter_cl.update(val=loss_cl.item(), n=1)    
+                acc_meter.update(val=acc, n=1)
+                acc_class0_meter.update(val=acc_class0, n=1)
+                acc_class1_meter.update(val=acc_class1, n=1)
+
+        return loss_meter_reg.avg, loss_meter_cl.avg, acc_meter.avg, acc_class0_meter.avg, acc_class1_meter.avg
 
