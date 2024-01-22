@@ -91,7 +91,7 @@ if __name__ == '__main__':
                                                 args.test_day_end, args.first_year)
     
     if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + args.log_file, 'a') as f:
+        with open(args.output_path + args.log_file, 'w') as f:
             f.write(f"\nStarting the validation, from {int(args.test_day_start)}/{int(args.test_month_start)}/{int(args.test_year_start)} to " +
                     f"{int(args.test_day_end)}/{int(args.test_month_end)}/{int(args.test_year_end)}.")
 
@@ -142,7 +142,7 @@ if __name__ == '__main__':
 
     custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
         
-    sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=True)
+    sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=False)
         
     dataloader = torch.utils.data.DataLoader(dataset_graph, batch_size=args.batch_size, num_workers=0,
                     sampler=sampler_graph, collate_fn=custom_collate_fn)
@@ -196,6 +196,25 @@ if __name__ == '__main__':
             acc.append(acc_epoch)
             acc_class0.append(acc_class0_epoch)
             acc_class1.append(acc_class1_epoch)
+
+        if (epoch != 5) == 0:
+            if args.model_type == "reg":
+                with open(args.output_path + "loss_reg.pkl", 'wb') as f:
+                    pickle.dump(np.array((loss_reg)), f)
+
+            elif args.model_type == "cl":
+                with open(args.output_path + "loss_cl.pkl", 'wb') as f:
+                    pickle.dump(np.array((loss_cl)), f)
+                
+                with open(args.output_path + "acc.pkl", 'wb') as f:
+                    pickle.dump(np.array((acc)), f)
+                
+                with open(args.output_path + "acc_class0.pkl", 'wb') as f:
+                    pickle.dump(np.array((acc_class0)), f)
+
+                with open(args.output_path + "acc_class1.pkl", 'wb') as f:
+                    pickle.dump(np.array((acc_class1)), f)
+
     
     end = time.time()
 

@@ -85,7 +85,6 @@ if __name__ == '__main__':
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
 
-
     pr_gripho = pr_gripho[:, test_start_idx:test_end_idx]
     pr_reg = torch.ones(pr_gripho.shape) * torch.nan
     pr_cl = torch.ones(pr_gripho.shape) * torch.nan
@@ -109,8 +108,6 @@ if __name__ == '__main__':
     Model_reg = getattr(models, args.model_reg)
     model_cl = Model_cl()
     model_reg = Model_reg()
-    if accelerator is not None:
-        model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)
 
     if accelerator is None:
         checkpoint_cl = torch.load(args.checkpoint_cl, map_location=torch.device('cpu'))
@@ -119,7 +116,7 @@ if __name__ == '__main__':
     else:
         checkpoint_cl = torch.load(args.checkpoint_cl)
         checkpoint_reg = torch.load(args.checkpoint_reg)
-        device = accelerator.device()
+        device = accelerator.device
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
@@ -132,6 +129,9 @@ if __name__ == '__main__':
             f.write("\nRegressor:")
     model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
         net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
+
+    if accelerator is not None:
+        model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:

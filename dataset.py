@@ -52,8 +52,8 @@ class Dataset_Graph(Dataset):
         self.graph['high'].deg = (degree(self.graph['high','within','high'].edge_index[0], self.graph['high'].num_nodes) / 8).unsqueeze(-1)
 
     def _get_features(self, time_index: int): # offset=24
-        #x_low = self.graph['low'].x[:,time_index-offset:time_index+1,:]
-        x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:]
+        x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
+        #x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:]
         x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low
     

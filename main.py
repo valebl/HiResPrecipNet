@@ -15,7 +15,7 @@ import dataset
 
 import HiResPrecipNet as models
 import utils
-from utils import Trainer, date_to_idxs, load_checkpoint
+from utils import Trainer, date_to_idxs, load_checkpoint, check_freezed_layers
 from accelerate import Accelerator
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -115,14 +115,13 @@ if __name__ == '__main__':
     if args.loss_fn == 'sigmoid_focal_loss':
         loss_fn = getattr(torchvision.ops, args.loss_fn)
     elif args.loss_fn == 'weighted_cross_entropy_loss':
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.25, 0.75]))
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.25, 0.75]), label_smoothing=0.1)
     elif args.loss_fn == 'weighted_mse_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'quantile_loss':
         loss_fn = getattr(utils, args.loss_fn) 
-    elif args.loss_fn == 'poly_loss':
-        loss_fn = getattr(utils, "PolyLoss")
-        loss_fn = loss_fn()
+    elif args.loss_fn == 'MSE_weighted2':
+        loss_fn = getattr(utils, args.loss_fn) 
     else:
         loss_fn = getattr(nn.functional, args.loss_fn) 
     
@@ -203,8 +202,6 @@ if __name__ == '__main__':
 #------------------ LOAD PARAMETERS ------------------
 #-----------------------------------------------------
 
-    #model.low2high.lin_r.weight = torch.nn.Parameter(torch.zeros((low_high_graph['high'].num_nodes,0)))
-
     epoch_start=0
     
     if args.ctd_training:
@@ -219,6 +216,8 @@ if __name__ == '__main__':
     #-- define the optimizer and trainable parameters
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     if args.ctd_training:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write("\nLoading optimizer paramaters.")
         optimizer.load_state_dict(checkpoint["optimizer"])
     
     #if args.ctd_training:
@@ -237,6 +236,9 @@ if __name__ == '__main__':
     else:
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
     
+    # Freeze the parameters referring to the high-res initial node features, which are all zero
+    model.low2high.lin_r.weight.requires_grad = False
+    
     if accelerator is not None:
         model, optimizer, dataloader, lr_scheduler, loss_fn = accelerator.prepare(model, optimizer, dataloader, lr_scheduler, loss_fn)
         if accelerator.is_main_process:
@@ -247,13 +249,20 @@ if __name__ == '__main__':
             f.write("\nNot using accelerator to prepare model, optimizer, dataloader and loss_fn...")
         model = model.cuda()
 
+    check_freezed_layers(model, args.output_path, args.log_file, accelerator)
+
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if accelerator is None or accelerator.is_main_process: 
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"\nTotal number of trainable parameters: {total_params}.")
+
 #-----------------------------------------------------
 #----------------------- TRAIN -----------------------
 #-----------------------------------------------------
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"\nUsing pct_trainset={args.pct_trainset}, lr={args.lr}, "+
+            f.write(f"\nUsing pct_trainset={args.pct_trainset}, lr={optimizer.param_groups[0]['lr']:.8f}, " +
                 f"weight decay = {args.weight_decay} and epochs={args.epochs}." + 
                 f"loss: {loss_fn}") 
             if accelerator is None:

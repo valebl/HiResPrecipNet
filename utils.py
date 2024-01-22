@@ -114,6 +114,10 @@ def weighted_mse_loss(input_batch, target_batch, weights):
     #return (weights * (input_batch - target_batch) ** 2).sum() / weights.sum()
     return torch.mean(weights * (input_batch - target_batch) ** 2)
 
+
+def MSE_weighted2(y_true, y_pred):
+    return torch.mean(torch.exp(2.0 * torch.expm1(y_true)) * (y_pred - y_true)**2)
+
 def quantile_loss(prediction_batch, target_batch, q=0.35):
     return torch.mean(torch.max(q*(prediction_batch-target_batch), (q-1)*(prediction_batch-target_batch)))
 
@@ -181,26 +185,26 @@ class Trainer(object):
                 optimizer.zero_grad()
 
                 #-- one ->
-                # y_pred = model(graph).squeeze()[train_mask]
-                # y = graph['high'].y[train_mask]
-                # loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
-                # accelerator.backward(loss)
-                # torch.nn.utils.clip_grad_norm_(model.parameters(),5)
-                # optimizer.step()
-                # loss_meter.update(val=loss.item(), n=1)    
-                # acc = accuracy_binary_one(y_pred, y)
-                # acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)
-          
-                #-- two ->
-                y_pred = model(graph)[train_mask]
+                y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y.to(torch.int64))
+                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
                 accelerator.backward(loss)
                 torch.nn.utils.clip_grad_norm_(model.parameters(),5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
-                acc = accuracy_binary_two(y_pred, y)
-                acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred, y)
+                acc = accuracy_binary_one(y_pred, y)
+                acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)
+          
+                #-- two ->
+                # y_pred = model(graph)[train_mask]
+                # y = graph['high'].y[train_mask]
+                # loss = loss_fn(y_pred, y.to(torch.int64))
+                # accelerator.backward(loss)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(),5)
+                # optimizer.step()
+                # loss_meter.update(val=loss.item(), n=1)    
+                # acc = accuracy_binary_two(y_pred, y)
+                # acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred, y)
 
                 #-- all ->
                 acc_meter.update(val=acc, n=1)
@@ -222,7 +226,7 @@ class Trainer(object):
 
             if accelerator.is_main_process:
                 checkpoint_dict = {
-                    "parameters": model.state_dict(),
+                    "parameters": model.module.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "epoch": epoch,
                     }
@@ -264,7 +268,7 @@ class Trainer(object):
                 lr_scheduler.step()
             if accelerator.is_main_process:
                 checkpoint_dict = {
-                    "parameters": model.state_dict(),
+                    "parameters": model.module.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "epoch": epoch,
                     }
@@ -291,10 +295,10 @@ class Tester(object):
                 # Classifier
                 y_pred_cl = model_cl(graph)
                 #-- (weighted) cross entropy loss ->
-                low_high_graph.pr_cl[:,t] = torch.argmax(torch.nn.functional.softmax(y_pred_cl, dim=-1), dim =-1).unsqueeze(-1).float().cpu()
+                #low_high_graph.pr_cl[:,t] = torch.argmax(torch.nn.functional.softmax(y_pred_cl, dim=-1), dim =-1).unsqueeze(-1).float().cpu()
                 #-- <-
                 #-- sigmoid focal loss ->
-                #low_high_graph.pr_cl[:,t] = torch.where(y_pred_cl >= 0.0, 1.0, 0.0)
+                low_high_graph.pr_cl[:,t] = torch.where(y_pred_cl >= 0.0, 1.0, 0.0).cpu()
                 #-- <-
                 
                 if step % 100 == 0:
