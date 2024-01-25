@@ -9,6 +9,8 @@ import sys
 
 from accelerate import Accelerator
 
+from torch_geometric.data import HeteroData
+
 import HiResPrecipNet as models
 import dataset
 from dataset import Dataset_Graph, Iterable_Graph
@@ -78,6 +80,8 @@ if __name__ == '__main__':
     test_start_idx, test_end_idx = date_to_idxs(args.test_year_start, args.test_month_start,
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year)
+    
+    test_start_idx = max(test_start_idx,24)
 
     with open(args.input_path+"pr_gripho.pkl", 'rb') as f:
         pr_gripho = pickle.load(f)
@@ -90,7 +94,7 @@ if __name__ == '__main__':
     pr_cl = torch.ones(pr_gripho.shape) * torch.nan
     pr = torch.ones(pr_gripho.shape) * torch.nan
 
-    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx:test_end_idx,:]    
+    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx-24:test_end_idx,:]    
     low_high_graph.pr_gripho = pr_gripho
     low_high_graph.pr_cl = pr_cl
     low_high_graph.pr_reg = pr_reg
@@ -136,7 +140,7 @@ if __name__ == '__main__':
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nStarting the test, from {int(args.test_day_start)}/{int(args.test_month_start)}/{int(args.test_year_start)} to " +
-                    f"{int(args.test_day_end)}/{int(args.test_month_end)}/{int(args.test_year_end)}.")
+                    f"{int(args.test_day_end)}/{int(args.test_month_end)}/{int(args.test_year_end)} (from idx {test_start_idx} to idx {test_end_idx}).")
 
     tester = Tester()
 
@@ -145,6 +149,16 @@ if __name__ == '__main__':
     tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args)
     end = time.time()
 
+    data = HeteroData()
+    data.pr_gripho = low_high_graph.pr_gripho
+    data.pr_cl = low_high_graph.pr_cl
+    data.pr_reg = low_high_graph.pr_reg
+    data.pr = low_high_graph.pr
+    data["low"].lat = low_high_graph["low"].lat
+    data["low"].lon = low_high_graph["low"].lon
+    data["high"].lat = low_high_graph["high"].lat
+    data["high"].lon = low_high_graph["high"].lon
+
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nDone. Testing concluded in {end-start} seconds.")
@@ -152,7 +166,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.output_file, 'wb') as f:
-            pickle.dump(low_high_graph, f)
+            pickle.dump(data, f)
 
     
 

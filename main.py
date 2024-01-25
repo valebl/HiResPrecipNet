@@ -133,7 +133,7 @@ if __name__ == '__main__':
     train_start_idx, train_end_idx = date_to_idxs(args.train_year_start, args.train_month_start,
                                                                       args.train_day_start, args.train_year_end, args.train_month_end,
                                                                       args.train_day_end, args.first_year)
-    train_start_idx = max(train_start_idx,25)
+    train_start_idx = max(train_start_idx,24)
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
@@ -147,7 +147,7 @@ if __name__ == '__main__':
         target_train = pickle.load(f)
 
     # Define input and target
-    low_high_graph['low'].x = low_high_graph['low'].x[:,train_start_idx:train_end_idx,:]
+    low_high_graph['low'].x = low_high_graph['low'].x[:,train_start_idx-24:train_end_idx,:]
     target_train = target_train[:,train_start_idx:train_end_idx]
 
     # Define a mask to ignore time indexes with all nan values

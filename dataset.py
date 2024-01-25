@@ -39,11 +39,11 @@ class Dataset_Graph(Dataset):
 
     def __len__(self):
         #return len(self.features)
-        return self.graph['low'].x.shape[1]
+        return self.graph['low'].x.shape[1] - 24
         
     def _check_temporal_consistency(self):
         if self.targets is not None:
-            assert self.graph['low'].x.shape[1] == self.targets.shape[1], "Temporal dimension inconsistency."
+            assert (self.graph['low'].x.shape[1] - 24) == self.targets.shape[1], "Temporal dimension inconsistency."
 
     def _set_snapshot_count(self):
         self.snapshot_count = len(self)
@@ -51,9 +51,10 @@ class Dataset_Graph(Dataset):
     def _add_node_degree(self):
         self.graph['high'].deg = (degree(self.graph['high','within','high'].edge_index[0], self.graph['high'].num_nodes) / 8).unsqueeze(-1)
 
-    def _get_features(self, time_index: int): # offset=24
-        x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
-        #x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:]
+    def _get_features(self, time_index: int):
+        time_index_x = time_index + 24
+        #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
+        x_low = self.graph['low'].x[:,time_index_x-24:time_index_x+1:6,:]
         x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low
     
@@ -88,7 +89,7 @@ class Dataset_Graph(Dataset):
                 snapshot['high'][key] = value
             elif value.shape[0] == self.graph['low'].x.shape[0]:
                 snapshot['high'][key] = value
-        
+       
         snapshot['high'].y = y
         snapshot['high'].train_mask = train_mask
         snapshot.num_nodes = self.graph.num_nodes
@@ -146,15 +147,15 @@ class Iterable_Graph(object):
         self.dataset_graph = dataset_graph
         self.shuffle = shuffle
         if self.shuffle:
-            self.sampling_vector = torch.randperm(len(self)-24) + 24
+            self.sampling_vector = torch.randperm(len(self))
         else:
-            self.sampling_vector = torch.arange(24, len(self))
+            self.sampling_vector = torch.arange(0, len(self))
 
     def __len__(self):
         return len(self.dataset_graph)
     
     def __next__(self):
-        if self.t < len(self) - 24:
+        if self.t < len(self):
             self.idx = self.sampling_vector[self.t].item()
             self.t = self.t + 1
             return self.idx

@@ -358,7 +358,7 @@ class HiResPrecipNet_fl_2(nn.Module):
 
 class HiResPrecipNet_fl_2_128(nn.Module):
     
-    def __init__(self, low_in=25*5*5, high_in=1, low2high_out=512, high_out=128):
+    def __init__(self, low_in=5*5*5, high_in=1, low2high_out=128, high_out=128):
         super(HiResPrecipNet_fl_2_128, self).__init__()
 
         self.low2high = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
