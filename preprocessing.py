@@ -364,8 +364,8 @@ if __name__ == '__main__':
 
     reg_weights[torch.isnan(pr_high)] = torch.nan
 
-    sum_all_weights = torch.nansum(reg_weights)
-    reg_weights[~torch.isnan(pr_high)] = reg_weights[~torch.isnan(pr_high)] / sum_all_weights
+    mean_all_weights = np.nanmean(reg_weights)
+    reg_weights[~torch.isnan(pr_high)] = reg_weights[~torch.isnan(pr_high)] / mean_all_weights
 
     with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
         pickle.dump(pr_sel_cl, f)    
