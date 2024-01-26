@@ -86,7 +86,7 @@ if __name__ == '__main__':
 #-----------------------------------------------------
 
     if args.use_accelerate is True:
-        accelerator = Accelerator(log_with="wandb", step_scheduler_with_optimizer=False)
+        accelerator = Accelerator(log_with="wandb", step_scheduler_with_optimizer=False, )
     else:
         accelerator = None
     
@@ -151,7 +151,7 @@ if __name__ == '__main__':
     target_train = target_train[:,train_start_idx:train_end_idx]
 
     # Define a mask to ignore time indexes with all nan values
-    mask_all_nan = []
+    mask_all_nan = [torch.tensor(True) for i in range(24)]
     initial_time_dim = target_train.shape[1]
     for t in range(initial_time_dim):
         nan_sum = target_train[:,t].isnan().sum()
@@ -164,13 +164,13 @@ if __name__ == '__main__':
                     f" time indexes are considered ({(mask_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
 
     low_high_graph['low'].x = low_high_graph['low'].x[:,mask_all_nan]
-    target_train = target_train[:,mask_all_nan]
+    target_train = target_train[:,mask_all_nan[24:]]
 
     if args.loss_fn == 'weighted_mse_loss':
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
         weights_reg = weights_reg[:,train_start_idx:train_end_idx]
-        weights_reg = weights_reg[:,mask_all_nan]
+        weights_reg = weights_reg[:,24:mask_all_nan]
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -187,16 +187,34 @@ if __name__ == '__main__':
 
     custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
         
-    sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=True)
-        
-    dataloader = torch.utils.data.DataLoader(dataset_graph, batch_size=args.batch_size, num_workers=0,
-                    sampler=sampler_graph, collate_fn=custom_collate_fn)
+    #-- split into trainset and testset
+    generator=torch.Generator().manual_seed(42)
+    len_trainset = int(len(dataset_graph) * args.pct_trainset)
+    len_validationset = len(dataset_graph) - len_trainset
+    dataset_graph_train, dataset_graph_val = torch.utils.data.random_split(
+        dataset_graph, lengths=(len_trainset, len_validationset), generator=generator)
+
+    sampler_graph_train = Iterable_Graph(dataset_graph=dataset_graph_train, shuffle=True)
+    sampler_graph_val = Iterable_Graph(dataset_graph=dataset_graph_val, shuffle=True)
+
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f'\nTrainset size = {len_trainset}, validationset size = {len_validationset}.')
+
+    dataloader_train = torch.utils.data.DataLoader(dataset_graph_train, batch_size=args.batch_size, num_workers=0,
+                    sampler=sampler_graph_train, collate_fn=custom_collate_fn)
+
+    dataloader_val = torch.utils.data.DataLoader(dataset_graph_val, batch_size=args.batch_size, num_workers=0,
+                    sampler=sampler_graph_val, collate_fn=custom_collate_fn)
 
     if accelerator is None or accelerator.is_main_process:
         total_memory, used_memory, free_memory = map(int, os.popen('free -t -m').readlines()[-1].split()[1:])
         with open(args.output_path+args.log_file, 'a') as f:
             f.write(f"\nRAM memory {round((used_memory/total_memory) * 100, 2)} %")
 
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
 
 #-----------------------------------------------------
 #------------------ LOAD PARAMETERS ------------------
@@ -208,17 +226,18 @@ if __name__ == '__main__':
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write("\nContinuing the training.")
-        checkpoint = torch.load(args.checkpoint_ctd)
-        model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
-            net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
-        epoch_start = checkpoint["epoch"] + 1
+        accelerator.load_state(args.checkpoint_ctd)
+        epoch_start = torch.load(args.checkpoint_ctd+"epoch")["epoch"] + 1
+        #checkpoint = torch.load(args.checkpoint_ctd) 
+        #model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
+        #    net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
+        #epoch_start = checkpoint["epoch"] + 1
 
     #-- define the optimizer and trainable parameters
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    if args.ctd_training:
-        with open(args.output_path+args.log_file, 'a') as f:
-            f.write("\nLoading optimizer paramaters.")
-        optimizer.load_state_dict(checkpoint["optimizer"])
+    #if args.ctd_training:
+    #    with open(args.output_path+args.log_file, 'a') as f:
+    #        f.write("\nLoading optimizer paramaters.")
+    #    optimizer.load_state_dict(checkpoint["optimizer"])
     
     #if args.ctd_training:
     #    optimizer.load_state_dict(checkpoint["optimizer"]
@@ -230,17 +249,13 @@ if __name__ == '__main__':
     #    with open(args.output_path+args.log_file, 'a') as f:
     #        f.write(f"\nTotal number of trainable parameters: {total_params}.")
 
-    if args.ctd_training:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=epoch_start)
-        #lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5, last_epoch=-1)
-    else:
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
     
     # Freeze the parameters referring to the high-res initial node features, which are all zero
     model.low2high.lin_r.weight.requires_grad = False
     
     if accelerator is not None:
-        model, optimizer, dataloader, lr_scheduler, loss_fn = accelerator.prepare(model, optimizer, dataloader, lr_scheduler, loss_fn)
+        model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn = accelerator.prepare(
+            model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn)
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write("\nUsing accelerator to prepare model, optimizer, dataloader and loss_fn...")
@@ -274,9 +289,9 @@ if __name__ == '__main__':
 
     trainer = Trainer()
     if args.model_type == "cl":
-        trainer.train_cl(model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
+        trainer.train_cl(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
     elif args.model_type == "reg":
-        trainer.train_reg(model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)       
+        trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)       
         
     end = time.time()
 

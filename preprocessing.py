@@ -353,11 +353,8 @@ if __name__ == '__main__':
     pr_sel_reg = torch.where(pr_high >= threshold, torch.log1p(pr_high), torch.nan).float()
     pr_sel_reg[torch.isnan(pr_high)] = torch.nan
 
-    pr_sel_reg_combined = torch.log1p(pr_high).float()
-    pr_sel_reg_combined[torch.isnan(pr_high)] = torch.nan
-
-    weights = [1,2,5,10,20,50]
-    weights_thresholds = [0,1,5,10,20,50]
+    weights = [1,2,5,10,20,50,100,150]
+    weights_thresholds = [0,1,5,10,20,50,100,150]
 
     reg_weights = torch.ones(pr_high.shape, dtype=torch.float32) * weights[0]
     
@@ -367,20 +364,22 @@ if __name__ == '__main__':
 
     reg_weights[torch.isnan(pr_high)] = torch.nan
 
+    sum_all_weights = torch.nansum(reg_weights)
+    reg_weights[~torch.isnan(pr_high)] = reg_weights[~torch.isnan(pr_high)] / sum_all_weights
+
     with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
         pickle.dump(pr_sel_cl, f)    
      
     with open(args.output_path + 'target_train_reg.pkl', 'wb') as f:
         pickle.dump(pr_sel_reg, f)    
 
-    with open(args.output_path + 'target_train_reg_combined.pkl', 'wb') as f:
-        pickle.dump(pr_sel_reg_combined, f)    
-
     with open(args.output_path + 'reg_weights.pkl', 'wb') as f:
         pickle.dump(reg_weights, f)    
 
     with open(args.output_path + 'pr_gripho.pkl', 'wb') as f:
         pickle.dump(pr_high, f)    
+
+    sys.exit()
 
     #-------------------------------------------------
     #----------- STANDARDISE LON LAT AND Z -----------

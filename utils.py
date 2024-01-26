@@ -164,8 +164,8 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 
 class Trainer(object):
 
-    def train_cl(self, model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args,
-                        epoch_start=0, alpha=0.75, gamma=2):
+    def train_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
+                        epoch_start, alpha=0.75, gamma=2):
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the classifier.")
@@ -174,13 +174,21 @@ class Trainer(object):
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
+
+            # Define objects to track meters
+            # -> Train
             loss_meter = AverageMeter()
             acc_meter = AverageMeter()
             acc_class0_meter = AverageMeter()
             acc_class1_meter = AverageMeter()
+            # -> Validation
+            loss_meter_val = AverageMeter()
+            acc_meter_val = AverageMeter()
+            acc_class0_meter_val = AverageMeter()
+            acc_class1_meter_val = AverageMeter()
             start = time.time()
 
-            for graph in dataloader:
+            for graph in dataloader_train:
                 train_mask = graph["high"].train_mask
                 optimizer.zero_grad()
 
@@ -214,7 +222,8 @@ class Trainer(object):
                     'accuracy avg': acc_meter.avg, 'accuracy class0 avg': acc_class0_meter.avg, 'accuracy class1 avg': acc_class1_meter.avg})
                 
             end = time.time()
-            # End of ecpoch --> write log and save checkpoint
+
+            # End of epoch --> write log and save checkpoint
             accelerator.log({'loss epoch': loss_meter.avg, 'accuracy epoch': acc_meter.avg, 'accuracy class0 epoch': acc_class0_meter.avg, 'accuracy class1 epoch': acc_class1_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
@@ -224,13 +233,45 @@ class Trainer(object):
             if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
                 lr_scheduler.step()
 
-            if accelerator.is_main_process:
-                checkpoint_dict = {
-                    "parameters": model.module.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "epoch": epoch,
-                    }
-                torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}.pth")
+            accelerator.save_state(output_dir=args.output_path+f"checkpoint_{epoch}/")
+            torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
+            
+            # Perform validation step
+            for graph in dataloader_val:
+                
+                train_mask = graph["high"].train_mask
+                optimizer.zero_grad()
+
+                #-- one ->
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
+                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                acc = accuracy_binary_one(y_pred, y)
+                acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
+
+                #-- two ->
+                # y_pred = model(graph)[train_mask]
+                # y = graph['high'].y[train_mask]
+                # loss = loss_fn(y_pred, y.to(torch.int64))
+                # acc = accuracy_binary_two(y_pred, y)
+                # acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred, y)
+
+                #-- all ->
+                loss_meter_val.update(val=loss.item(), n=1)    
+                acc_meter_val.update(val=acc, n=1)
+                acc_class0_meter_val.update(val=acc_class0, n=1)
+                acc_class1_meter_val.update(val=acc_class1, n=1)
+            
+            accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
+                                'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg})
+
+            #if accelerator.is_main_process:
+            #    checkpoint_dict = {
+            #        "parameters": model.module.state_dict(),
+            #        "optimizer": optimizer.state_dict(),
+            #        "epoch": epoch,
+            #        }
+            #    torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}.pth")
 
     def train_reg(self, model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         if accelerator.is_main_process:
