@@ -49,6 +49,7 @@ parser.add_argument('--test_year_end', type=int)
 parser.add_argument('--test_month_end', type=int)
 parser.add_argument('--test_day_end', type=int)
 parser.add_argument('--first_year', type=int)
+parser.add_argument('--first_year_input', type=int)
 
 parser.add_argument('--batch_size', type=int)
 
@@ -81,7 +82,12 @@ if __name__ == '__main__':
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year)
     
-    test_start_idx = max(test_start_idx,24)
+    test_start_idx_input, test_end_idx_input = date_to_idxs(args.test_year_start, args.test_month_start,
+                                                args.test_day_start, args.test_year_end, args.test_month_end,
+                                                args.test_day_end, args.first_year_input)
+    
+    #test_start_idx = max(test_start_idx,24)
+    test_start_idx_input = max(test_start_idx_input,24)
 
     with open(args.input_path+"pr_gripho.pkl", 'rb') as f:
         pr_gripho = pickle.load(f)
@@ -94,7 +100,7 @@ if __name__ == '__main__':
     pr_cl = torch.ones(pr_gripho.shape) * torch.nan
     pr = torch.ones(pr_gripho.shape) * torch.nan
 
-    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx-24:test_end_idx,:]    
+    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input-24:test_end_idx_input,:]    
     low_high_graph.pr_gripho = pr_gripho
     low_high_graph.pr_cl = pr_cl
     low_high_graph.pr_reg = pr_reg
@@ -124,15 +130,17 @@ if __name__ == '__main__':
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
-            f.write("\nClassifier:")    
-    model_cl = load_checkpoint(model_cl, checkpoint_cl, args.output_path, args.log_file, accelerator, 
-        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
+            f.write("\nLoading classifier state dict.")    
+    model_cl.load_state_dict(checkpoint_cl)
+#    model_cl = load_checkpoint(model_cl, checkpoint_cl, args.output_path, args.log_file, accelerator, 
+#        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
-            f.write("\nRegressor:")
-    model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
-        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
+            f.write("\nLoading regressor state dict.")
+    model_reg.load_state_dict(checkpoint_reg)
+#    model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
+#        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
 
     if accelerator is not None:
         model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)

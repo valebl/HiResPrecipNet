@@ -36,16 +36,8 @@ parser.add_argument('--train_day_start', type=float)
 parser.add_argument('--train_year_end', type=float)
 parser.add_argument('--train_month_end', type=float)
 parser.add_argument('--train_day_end', type=float)
-parser.add_argument('--first_year', type=float)
-
-#-- lon/lat radius to identify when two nodes are connected by an edge
-#-- this value is hand-calibrated and may be different for other data
-parser.add_argument('--lon_grid_radius_high', type=float, default=0.0625)
-parser.add_argument('--lat_grid_radius_high', type=float, default=0.05)
-parser.add_argument('--lon_grid_radius_low', type=float, default=0.26)
-parser.add_argument('--lat_grid_radius_low', type=float, default=0.26)
-parser.add_argument('--lon_grid_radius_low2high', type=float, default=0.35)
-parser.add_argument('--lat_grid_radius_low2high', type=float, default=0.35)
+parser.add_argument('--first_year_input', type=float)
+parser.add_argument('--first_year_target', type=float)
 
 #-- other
 parser.add_argument('--suffix', type=str, default='')
@@ -204,31 +196,49 @@ if __name__ == '__main__':
     ##           PREPROCESSING LOW RES DATA             ##
     ######################################################
 
-    params = ['q', 't', 'u', 'v', 'z']
+    if args.predictors_type == "ERA5":
+        params = ['q', 't', 'u', 'v', 'z']
+    elif args.predictors_type == "RegCM":
+        params = ['hus', 'ta', 'ua', 'va', 'zg']
+    else:
+        raise Exception("args.predictors_type should be either ERA5 or RegCM")
+    
     n_params = len(params)
  
     #-----------------------------------------------------
     #-------------- INPUT TENSOR FROM FILES --------------
     #-----------------------------------------------------
     
-    with open(args.output_path + args.log_file, 'w') as f:
-        f.write(f'\nStarting the preprocessing of the low resolution data.')
+    write_log('\nStarting the preprocessing of the low resolution data.', args, 'w')
 
     for p_idx, p in enumerate(params):
-        with open(args.output_path + args.log_file, 'a') as f:
-            f.write(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc ...')
-        #with xr.open_dataset(f'{args.input_path}/{args.input_files_prefix}{p}.nc') as f:
-        #    data = f[p].values
-        with nc.Dataset(f'{args.input_path_low}{args.input_files_prefix_low}{p}.nc') as ds:
-            data = ds[p][:]
-            if p_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
-                lat_low = ds['latitude'][:]
-                lon_low = ds['longitude'][:]
-                lat_dim = len(lat_low)
-                lon_dim = len(lon_low)
-                time_dim = len(ds['time'])
-                input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # variables, levels, time, lat, lon
-        input_ds[:, p_idx,:,:,:] = data
+        if args.predictors_type == "ERA5":
+            write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc ...', args)
+            with nc.Dataset(f'{args.input_path_low}{args.input_files_prefix_low}{p}.nc') as ds:
+                data = ds[p][:]
+                if p_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
+                    lat_low = ds['latitude'][:]
+                    lon_low = ds['longitude'][:]
+                    lat_dim = len(lat_low)
+                    lon_dim = len(lon_low)
+                    time_dim = len(ds['time'])
+                    input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # variables, levels, time, lat, lon
+            input_ds[:, p_idx,:,:,:] = data
+
+        elif args.predictors_type == "RegCM":
+            for l_idx, level in enumerate(['200', '500', '700', '850', '1000']):
+                write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc for level {level}...', args)
+                with nc.Dataset(f'{args.input_path_low}{args.input_files_prefix_low}{p}.nc') as ds:
+                    var_name = f"{p}{level}"
+                    data = ds[var_name][:]
+                    if p_idx == 0 and l_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
+                        lat_low = ds['latitude'][:]
+                        lon_low = ds['longitude'][:]
+                        lat_dim = len(lat_low)
+                        lon_dim = len(lon_low)
+                        time_dim = len(ds['time'])
+                        input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # time, variables, levels, lat, lon
+                input_ds[:, p_idx,l_idx,:,:] = data
 
     lat_low, lon_low = torch.meshgrid(torch.flip(torch.tensor(lat_low),[0]), torch.tensor(lon_low), indexing='ij')
 
@@ -379,7 +389,6 @@ if __name__ == '__main__':
     with open(args.output_path + 'pr_gripho.pkl', 'wb') as f:
         pickle.dump(pr_high, f)    
 
-    sys.exit()
 
     #-------------------------------------------------
     #----------- STANDARDISE LON LAT AND Z -----------

@@ -15,7 +15,7 @@ import dataset
 
 import HiResPrecipNet as models
 import utils
-from utils import Trainer, date_to_idxs, load_checkpoint, check_freezed_layers
+from utils import Trainer, Tester, date_to_idxs, load_checkpoint, check_freezed_layers
 from accelerate import Accelerator
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -118,6 +118,8 @@ if __name__ == '__main__':
         loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.25, 0.75]), label_smoothing=0.1)
     elif args.loss_fn == 'weighted_mse_loss':
         loss_fn = getattr(utils, args.loss_fn)
+    elif args.loss_fn == 'weighted_mse_loss_ASYM':
+        loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'quantile_loss':
         loss_fn = getattr(utils, args.loss_fn) 
     elif args.loss_fn == 'MSE_weighted2':
@@ -166,11 +168,11 @@ if __name__ == '__main__':
     low_high_graph['low'].x = low_high_graph['low'].x[:,mask_all_nan]
     target_train = target_train[:,mask_all_nan[24:]]
 
-    if args.loss_fn == 'weighted_mse_loss':
+    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "weighted_mse_loss_ASYM":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
         weights_reg = weights_reg[:,train_start_idx:train_end_idx]
-        weights_reg = weights_reg[:,24:mask_all_nan]
+        weights_reg = weights_reg[:,mask_all_nan[24:]]
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -251,7 +253,7 @@ if __name__ == '__main__':
 
     
     # Freeze the parameters referring to the high-res initial node features, which are all zero
-    model.low2high.lin_r.weight.requires_grad = False
+    model.downscaler.lin_r.weight.requires_grad = False
     
     if accelerator is not None:
         model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn = accelerator.prepare(
@@ -289,9 +291,9 @@ if __name__ == '__main__':
 
     trainer = Trainer()
     if args.model_type == "cl":
-        trainer.train_cl(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
+        model = trainer.train_cl(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
     elif args.model_type == "reg":
-        trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)       
+        model = trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)       
         
     end = time.time()
 
@@ -299,8 +301,57 @@ if __name__ == '__main__':
         with open(args.output_path+args.log_file, 'a') as f:
             f.write(f"\nCompleted in {end - start} seconds.")
             f.write(f"\nDONE!")
-    
-    
-    
+
+
+#-----------------------------------------------------
+#------------------------ TEST -----------------------
+#-----------------------------------------------------
+
+    test_start_idx, test_end_idx = date_to_idxs(year_start=2015, month_start=12, day_start=1,
+                                                    year_end=2016, month_end=12, day_end=31, first_year=2001)
+
+    with open(args.input_path+args.graph_file, 'rb') as f:
+        low_high_graph = pickle.load(f)
+        
+    predictions = torch.ones((low_high_graph['high'].num_nodes, test_end_idx-test_start_idx)) * torch.nan
+
+    low_high_graph.predictions = predictions
+    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx-24:test_end_idx,:]    
+
+    dataset_graph = Dataset_Graph(targets=None, graph=low_high_graph)
+    custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
+    sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=False)
+            
+    dataloader = torch.utils.data.DataLoader(dataset_graph, batch_size=1, num_workers=0,
+                    sampler=sampler_graph, collate_fn=custom_collate_fn)
+
+    if accelerator.is_main_process:
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write(f"\nStarting the test, from 01/11/2015 to 31/12/2015 (from idx {test_start_idx} to idx {test_end_idx}).")
+
+    model, dataloader = accelerator.prepare(model, dataloader)
+
+    tester = Tester()
+
+    start = time.time()
+
+    if args.model_type == "cl":
+        tester.test_cl(model, dataloader, low_high_graph=low_high_graph, args=args)
+    elif args.model_type == "reg":
+        tester.test_reg(model, dataloader, low_high_graph=low_high_graph, args=args)
+
+    end = time.time()
+
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write(f"\nDone. Testing concluded in {end-start} seconds.")
+            f.write("\nWrite the files.")
+
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path + "predictions.pkl", 'wb') as f:
+            pickle.dump(low_high_graph.predictions, f)
+        
+        
+        
     
 

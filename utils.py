@@ -114,6 +114,8 @@ def weighted_mse_loss(input_batch, target_batch, weights):
     #return (weights * (input_batch - target_batch) ** 2).sum() / weights.sum()
     return torch.mean(weights * (input_batch - target_batch) ** 2)
 
+def weighted_mse_loss_ASYM(input_batch, target_batch, weights):
+    return torch.mean(torch.abs(input_batch - target_batch) + weights**2 * torch.clamp(target_batch - input_batch, min=0))
 
 def MSE_weighted2(y_true, y_pred):
     return torch.mean(torch.exp(2.0 * torch.expm1(y_true)) * (y_pred - y_true)**2)
@@ -272,8 +274,9 @@ class Trainer(object):
             #        "epoch": epoch,
             #        }
             #    torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}.pth")
+        return model
 
-    def train_reg(self, model, dataloader, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
+    def train_reg(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the regressor.")
@@ -283,9 +286,11 @@ class Trainer(object):
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
             loss_meter = AverageMeter()
+            loss_meter_val = AverageMeter()
+            
             start = time.time()
 
-            for graph in dataloader:
+            for graph in dataloader_train:
                 train_mask = graph['high'].train_mask
                 optimizer.zero_grad()
                 y_pred = model(graph).squeeze()[train_mask]
@@ -307,13 +312,25 @@ class Trainer(object):
             
             if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
                 lr_scheduler.step()
-            if accelerator.is_main_process:
-                checkpoint_dict = {
-                    "parameters": model.module.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "epoch": epoch,
-                    }
-                torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}.pth")
+            
+            accelerator.save_state(output_dir=args.output_path+f"checkpoint_{epoch}/")
+            torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
+            
+            # Perform validation step
+            for graph in dataloader_val:
+                
+                train_mask = graph["high"].train_mask
+                optimizer.zero_grad()
+
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
+                #loss = loss_fn(y_pred, y)
+                w = graph['high'].w[train_mask]
+                loss = loss_fn(y_pred, y, w)
+                loss_meter_val.update(val=loss.item(), n=1)    
+
+            accelerator.log({'validation loss': loss_meter_val.avg})
+        return model
 
 
 class Tester(object):
@@ -352,6 +369,46 @@ class Tester(object):
         #low_high_graph["pr"] = torch.where(y_pred_cl > 0.0, 1.0, 0.0).cpu() * low_high_graph.pr_reg 
         return
     
+    def test_cl(self, model_cl, dataloader,low_high_graph, args, accelerator=None):
+        model_cl.eval()
+        step = 0 
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                t = graph.t.cpu()
+
+                # Classifier
+                y_pred_cl = model_cl(graph)
+                #-- (weighted) cross entropy loss ->
+                #low_high_graph.pr_cl[:,t] = torch.argmax(torch.nn.functional.softmax(y_pred_cl, dim=-1), dim =-1).unsqueeze(-1).float().cpu()
+                #-- <-
+                #-- sigmoid focal loss ->
+                low_high_graph.predictions[:,t] = torch.where(y_pred_cl >= 0.0, 1.0, 0.0).cpu()
+                #-- <-
+                
+                if step % 100 == 0:
+                    with open(args.output_path+args.log_file, 'a') as f:
+                        f.write(f"\nStep {step} done.")
+                step += 1 
+        return
+    
+    def test_reg(self, model_reg, dataloader,low_high_graph, args, accelerator=None):
+        model_reg.eval()
+        step = 0 
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                t = graph.t.cpu()
+                
+                # Regressor
+                y_pred_reg = model_reg(graph)
+                low_high_graph.predictions[:,t] = torch.expm1(y_pred_reg).cpu()
+
+                if step % 100 == 0:
+                    with open(args.output_path+args.log_file, 'a') as f:
+                        f.write(f"\nStep {step} done.")
+                step += 1 
+        return
     
     def validate_cl(self, model, dataloader, loss_fn):
 
