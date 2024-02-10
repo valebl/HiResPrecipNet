@@ -124,6 +124,8 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn) 
     elif args.loss_fn == 'MSE_weighted2':
         loss_fn = getattr(utils, args.loss_fn) 
+    elif args.loss_fn == 'modified_MSE_quantile_loss':
+        loss_fn = getattr(utils, args.loss_fn)()
     else:
         loss_fn = getattr(nn.functional, args.loss_fn) 
     
@@ -151,6 +153,7 @@ if __name__ == '__main__':
     # Define input and target
     low_high_graph['low'].x = low_high_graph['low'].x[:,train_start_idx-24:train_end_idx,:]
     target_train = target_train[:,train_start_idx:train_end_idx]
+
 
     # Define a mask to ignore time indexes with all nan values
     mask_all_nan = [torch.tensor(True) for i in range(24)]

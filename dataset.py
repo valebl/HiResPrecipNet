@@ -15,8 +15,9 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.utils import degree
 
-Graph = Union[HeteroData,None]
+Graph = Union[HeteroData, None]
 Targets = Sequence[Union[np.ndarray, None]]
+DoubleCl = Union[bool, None]
 Additional_Features = Sequence[torch.tensor]
 
 
@@ -26,6 +27,7 @@ class Dataset_Graph(Dataset):
         self,
         graph: Graph,
         targets: Targets,
+        double_cl: DoubleCl,
         **kwargs: Additional_Features
     ):
         self.graph = graph
@@ -36,6 +38,7 @@ class Dataset_Graph(Dataset):
             self.additional_feature_keys.append(key)
         self._check_temporal_consistency()
         self._add_node_degree()
+
 
     def __len__(self):
         #return len(self.features)
@@ -63,7 +66,7 @@ class Dataset_Graph(Dataset):
 
     def _get_train_mask(self, target: torch.tensor):
         return ~torch.isnan(target)
-        
+    
     def _get_additional_feature(self, time_index: int, feature_key: str):
         feature = getattr(self, feature_key)[:,time_index]
         return feature

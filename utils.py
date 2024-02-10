@@ -7,6 +7,7 @@ import torch
 
 from datetime import datetime, timedelta, date
 from torch_geometric.transforms import ToDevice
+from pytorch_forecasting.metrics.quantile import QuantileLoss
 
 from datetime import datetime, date
 
@@ -78,14 +79,13 @@ def accuracy_binary_one_classes(prediction, target):
     if correct_items_class0.shape[0] > 0:
         acc_class0 = correct_items_class0.sum().item() / correct_items_class0.shape[0]
     else:
-        acc_class0 = 0.0
+        acc_class0 = torch.nan
     correct_items_class1 = correct_items[target==1.0]
     if correct_items_class1.shape[0] > 0:
         acc_class1 = correct_items_class1.sum().item() / correct_items_class1.shape[0]
     else:
-        acc_class0 = 0.0
+        acc_class1 = torch.nan
     return acc_class0, acc_class1
-
 
 def accuracy_binary_two(prediction, target):
     prediction = torch.nn.functional.softmax(prediction, dim=-1)
@@ -102,12 +102,12 @@ def accuracy_binary_two_classes(prediction, target):
     if correct_items_class0.shape[0] > 0:
         acc_class0 = correct_items_class0.sum().item() / correct_items_class0.shape[0]
     else:
-        acc_class0 = 0.0
+        acc_class0 = torch.nan
     correct_items_class1 = correct_items[target==1.0]
     if correct_items_class1.shape[0] > 0:
         acc_class1 = correct_items_class1.sum().item() / correct_items_class1.shape[0]
     else:
-        acc_class1 = 0.0
+        acc_class1 = torch.nan
     return acc_class0, acc_class1
 
 def weighted_mse_loss(input_batch, target_batch, weights):
@@ -120,8 +120,19 @@ def weighted_mse_loss_ASYM(input_batch, target_batch, weights):
 def MSE_weighted2(y_true, y_pred):
     return torch.mean(torch.exp(2.0 * torch.expm1(y_true)) * (y_pred - y_true)**2)
 
-def quantile_loss(prediction_batch, target_batch, q=0.35):
-    return torch.mean(torch.max(q*(prediction_batch-target_batch), (q-1)*(prediction_batch-target_batch)))
+# def quantile_loss(prediction_batch, target_batch, q=0.35):
+#     return torch.mean(torch.max(q*(prediction_batch-target_batch), (q-1)*(prediction_batch-target_batch)))
+
+class modified_MSE_quantile_loss():
+    def __init__(self, quantiles=[0.85], alpha=0.2):
+        self.quantile_loss = QuantileLoss(quantiles)
+        self.mse_loss = nn.MSELoss()
+        self.alpha = alpha
+    
+    def __call__(self, input_batch, target_batch):
+        loss = self.alpha * self.mse_loss(input_batch, target_batch) \
+            + (1-self.alpha) * self.quantile_loss(input_batch, target_batch)
+        return loss
 
 def load_checkpoint(model, checkpoint, log_path, log_file, accelerator, net_names, fine_tuning=True, device=None, output=True):
     if accelerator is None or accelerator.is_main_process:
@@ -167,7 +178,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 class Trainer(object):
 
     def train_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
-                        epoch_start, alpha=0.75, gamma=2):
+                        epoch_start, alpha=-1, gamma=2):
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the classifier.")
