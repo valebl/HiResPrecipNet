@@ -5,7 +5,7 @@ import torchvision.ops
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
-from dataset import Dataset_Graph, Iterable_Graph
+from dataset import Iterable_Graph
 import dataset
 import time
 import argparse
@@ -61,6 +61,7 @@ parser.add_argument('--interval', type=float, default=0.25)
 
 parser.add_argument('--model_type', type=str)
 parser.add_argument('--model_name', type=str, default='HiResPrecipNet')
+parser.add_argument('--dataset_name', type=str, default='Dataset_Graph')
 
 #-- start and end training dates
 parser.add_argument('--train_year_start', type=float)
@@ -124,7 +125,7 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn) 
     elif args.loss_fn == 'MSE_weighted2':
         loss_fn = getattr(utils, args.loss_fn) 
-    elif args.loss_fn == 'modified_MSE_quantile_loss':
+    elif args.loss_fn == 'modified_mse_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)()
     else:
         loss_fn = getattr(nn.functional, args.loss_fn) 
@@ -156,26 +157,28 @@ if __name__ == '__main__':
 
 
     # Define a mask to ignore time indexes with all nan values
-    mask_all_nan = [torch.tensor(True) for i in range(24)]
+    mask_not_all_nan = [torch.tensor(True) for i in range(24)]
     initial_time_dim = target_train.shape[1]
     for t in range(initial_time_dim):
         nan_sum = target_train[:,t].isnan().sum()
-        mask_all_nan.append(nan_sum < target_train.shape[0])
-    mask_all_nan = torch.stack(mask_all_nan)
+        mask_not_all_nan.append(nan_sum < target_train.shape[0])
+    mask_not_all_nan = torch.stack(mask_not_all_nan)
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"\nAfter removing all nan time indexes, {mask_all_nan.sum()}" +
-                    f" time indexes are considered ({(mask_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
+            f.write(f"\nAfter removing all nan time indexes, {mask_not_all_nan.sum()}" +
+                    f" time indexes are considered ({(mask_not_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
 
-    low_high_graph['low'].x = low_high_graph['low'].x[:,mask_all_nan]
-    target_train = target_train[:,mask_all_nan[24:]]
+    low_high_graph['low'].x = low_high_graph['low'].x[:,mask_not_all_nan]
+    target_train = target_train[:,mask_not_all_nan[24:]]
 
+    Dataset_Graph = getattr(dataset, args.dataset_name)
+    
     if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "weighted_mse_loss_ASYM":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
         weights_reg = weights_reg[:,train_start_idx:train_end_idx]
-        weights_reg = weights_reg[:,mask_all_nan[24:]]
+        weights_reg = weights_reg[:,mask_not_all_nan[24:]]
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -256,7 +259,7 @@ if __name__ == '__main__':
 
     
     # Freeze the parameters referring to the high-res initial node features, which are all zero
-    model.downscaler.lin_r.weight.requires_grad = False
+    #model.downscaler.lin_r.weight.requires_grad = False
     
     if accelerator is not None:
         model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn = accelerator.prepare(
@@ -310,6 +313,8 @@ if __name__ == '__main__':
 #------------------------ TEST -----------------------
 #-----------------------------------------------------
 
+
+
     test_start_idx, test_end_idx = date_to_idxs(year_start=2015, month_start=12, day_start=1,
                                                     year_end=2016, month_end=12, day_end=31, first_year=2001)
 
@@ -321,14 +326,16 @@ if __name__ == '__main__':
     low_high_graph.predictions = predictions
     low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx-24:test_end_idx,:]    
 
-    dataset_graph = Dataset_Graph(targets=None, graph=low_high_graph)
+    Dataset_Graph_test = getattr(dataset, "Dataset_Graph")
+
+    dataset_graph = Dataset_Graph_test(targets=None, graph=low_high_graph)
     custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
     sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=False)
             
     dataloader = torch.utils.data.DataLoader(dataset_graph, batch_size=1, num_workers=0,
                     sampler=sampler_graph, collate_fn=custom_collate_fn)
 
-    if accelerator.is_main_process:
+    if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nStarting the test, from 01/11/2015 to 31/12/2015 (from idx {test_start_idx} to idx {test_end_idx}).")
 
@@ -339,11 +346,18 @@ if __name__ == '__main__':
     start = time.time()
 
     if args.model_type == "cl":
-        tester.test_cl(model, dataloader, low_high_graph=low_high_graph, args=args)
+        predictions, times = tester.test_cl(model, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
     elif args.model_type == "reg":
-        tester.test_reg(model, dataloader, low_high_graph=low_high_graph, args=args)
+        predictions, times = tester.test_reg(model, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
 
     end = time.time()
+
+    accelerator.wait_for_everyone()
+
+    times = accelerator.gather(times).squeeze()
+    times, indices = torch.sort(times)
+
+    predictions = accelerator.gather(predictions).squeeze().swapaxes(0,1)[:,indices]
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
@@ -352,8 +366,8 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + "predictions.pkl", 'wb') as f:
-            pickle.dump(low_high_graph.predictions, f)
-        
+            pickle.dump(predictions.cpu(), f)
+    
         
         
     
