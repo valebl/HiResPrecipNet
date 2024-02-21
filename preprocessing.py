@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import netCDF4 as nc
 
 from torch_geometric.data import Data, HeteroData
-# import torch_geometric.transforms as T
-# transform = T.AddLaplacianEigenvectorPE(k=2)
+import torch_geometric.transforms as T
+transform = T.AddLaplacianEigenvectorPE(k=2)
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -28,6 +28,10 @@ parser.add_argument('--lon_max', type=float)
 parser.add_argument('--lat_min', type=float)
 parser.add_argument('--lat_max', type=float)
 parser.add_argument('--interval', type=float)
+parser.add_argument('--lon_grid_radius_low', type=float)
+parser.add_argument('--lat_grid_radius_low', type=float)
+parser.add_argument('--lon_grid_radius_high', type=float)
+parser.add_argument('--lat_grid_radius_high', type=float)
 
 #-- start and end training dates
 parser.add_argument('--train_year_start', type=float)
@@ -48,6 +52,7 @@ parser.add_argument('--means_file_low', type=str, default='means.pkl')
 parser.add_argument('--stds_file_low', type=str, default='stds.pkl')
 parser.add_argument('--mean_std_over_variable_low', action='store_true')
 parser.add_argument('--mean_std_over_variable_and_level_low', dest='mean_std_over_variable_low', action='store_false')
+parser.add_argument('--predictors_type', type=str)
 
 #-- era5
 parser.add_argument('--input_path_low', type=str, help='path to input directory')
@@ -361,10 +366,11 @@ if __name__ == '__main__':
     pr_sel_cl[torch.isnan(pr_high)] = torch.nan
 
     pr_sel_reg = torch.where(pr_high >= threshold, torch.log1p(pr_high), torch.nan).float()
+    #pr_sel_reg = torch.where(pr_high >= threshold, pr_high, torch.nan).float()
     pr_sel_reg[torch.isnan(pr_high)] = torch.nan
 
-    weights = [1,2,5,10,20,50,100,150]
-    weights_thresholds = [0,1,5,10,20,50,100,150]
+    weights = [1,2,5,10,20,50]
+    weights_thresholds = [0,1,5,10,20,50]
 
     reg_weights = torch.ones(pr_high.shape, dtype=torch.float32) * weights[0]
     
@@ -374,8 +380,8 @@ if __name__ == '__main__':
 
     reg_weights[torch.isnan(pr_high)] = torch.nan
 
-    mean_all_weights = np.nanmean(reg_weights)
-    reg_weights[~torch.isnan(pr_high)] = reg_weights[~torch.isnan(pr_high)] / mean_all_weights
+    #mean_all_weights = np.nanmean(reg_weights)
+    #reg_weights[~torch.isnan(pr_high)] = reg_weights[~torch.isnan(pr_high)] / mean_all_weights
 
     with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
         pickle.dump(pr_sel_cl, f)    
@@ -414,12 +420,11 @@ if __name__ == '__main__':
     ######################################################
 
     low_high_graph = HeteroData()
+    high_graph = Data()
 
     #-----------------------------------------------------
     #----------------------- EDGES -----------------------
     #-----------------------------------------------------
-
-    write_log(f"\nUsing radius lon: {args.lon_grid_radius_low2high} and lat: {args.lat_grid_radius_low2high} for lon2high edges.", args)
 
     edges_low = derive_edge_indexes(lon_radius=args.lon_grid_radius_low, lat_radius=args.lat_grid_radius_low,
                                   lon_n1=lon_low, lat_n1=lat_low, lon_n2=lon_low, lat_n2=lat_low)
@@ -447,6 +452,12 @@ if __name__ == '__main__':
     low_high_graph['low', 'within', 'low'].edge_index = edges_low.swapaxes(0,1)
     low_high_graph['high', 'within', 'high'].edge_index = edges_high.swapaxes(0,1)
     low_high_graph['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
+
+    # Add Laplacian positional encodings
+    high_graph.edge_index = edges_high.swapaxes(0,1)
+    high_graph.x = torch.zeros((num_nodes_high, 0))
+    high_graph = transform(high_graph)
+    low_high_graph['high'].laplacian_eigenvector_pe = high_graph.laplacian_eigenvector_pe
 
     with open(args.output_path + 'low_high_graph' + args.suffix + '.pkl', 'wb') as f:
         pickle.dump(low_high_graph, f)
