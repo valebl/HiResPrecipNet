@@ -15,6 +15,9 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.utils import degree
 
+import torch_geometric.transforms as T
+transform = T.AddLaplacianEigenvectorPE(k=2)
+
 Graph = Union[HeteroData, None]
 Targets = Sequence[Union[np.ndarray, None]]
 DoubleCl = Union[bool, None]
@@ -27,7 +30,6 @@ class Dataset_Graph(Dataset):
         self,
         graph: Graph,
         targets: Targets,
-        double_cl: DoubleCl,
         **kwargs: Additional_Features
     ):
         self.graph = graph
@@ -37,7 +39,7 @@ class Dataset_Graph(Dataset):
             setattr(self, key, value)
             self.additional_feature_keys.append(key)
         self._check_temporal_consistency()
-        self._add_node_degree()
+        #self._add_node_degree()
 
 
     def __len__(self):
@@ -51,8 +53,9 @@ class Dataset_Graph(Dataset):
     def _set_snapshot_count(self):
         self.snapshot_count = len(self)
     
-    def _add_node_degree(self):
-        self.graph['high'].deg = (degree(self.graph['high','within','high'].edge_index[0], self.graph['high'].num_nodes) / 8).unsqueeze(-1)
+    def _get_high_nodes_degree(self, snapshot):
+        node_degree = (degree(snapshot['high','within','high'].edge_index[0], snapshot['high'].num_nodes) / 8).unsqueeze(-1)
+        return node_degree
 
     def _get_features(self, time_index: int):
         time_index_x = time_index + 24
@@ -104,17 +107,18 @@ class Dataset_Graph(Dataset):
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
 
-        snapshot['low'].x = x_low
-        snapshot['high'].x_empty = self.graph['high'].x
+        snapshot['low'].x = x_low 
+        #snapshot['high'].x_empty = self.graph['high'].x
         snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
 
         snapshot['high'].lon = self.graph['high'].lon
         snapshot['high'].lat = self.graph['high'].lat
-        snapshot['high'].deg = self.graph['high'].deg
         snapshot['low'].lon = self.graph['low'].lon
         snapshot['low'].lat = self.graph['low'].lat
-        
+
+        #snapshot['high'].laplacian_eigenvector_pe = self.graph['high'].laplacian_eigenvector_pe     
+        snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
 
         return snapshot
 
@@ -142,6 +146,76 @@ class Dataset_Graph(Dataset):
         s['node_idx'] = node_idx
         
         return s
+    
+
+class Dataset_Graph_t(Dataset_Graph):
+
+    def _get_features(self, time_index: int):
+        time_index_x = time_index + 24
+        x_low = self.graph['low'].x[:,time_index_x,:]
+        x_low = x_low.flatten(start_dim=1, end_dim=-1)
+        return x_low
+
+class Dataset_Graph_subgraphs(Dataset_Graph):
+
+    def __getitem__(self, time_index: int):
+            x_low = self._get_features(time_index)
+            y = self._get_target(time_index) if self.targets is not None else None
+            train_mask = self._get_train_mask(y) if y is not None else None
+
+            additional_features = self._get_additional_features(time_index)
+
+            snapshot = HeteroData()
+
+            for key, value in additional_features.items():
+                if value.shape[0] == self.graph['high'].x.shape[0]:
+                    snapshot['high'][key] = value
+                elif value.shape[0] == self.graph['low'].x.shape[0]:
+                    snapshot['high'][key] = value
+        
+            snapshot['high'].y = y
+            # snapshot['high'].train_mask = train_mask
+            snapshot.num_nodes = self.graph.num_nodes
+            snapshot['high'].num_nodes = self.graph['high'].num_nodes
+            snapshot['low'].num_nodes = self.graph['low'].num_nodes
+            snapshot.t = time_index
+            
+            snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
+            snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
+            snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+
+            snapshot['low'].x = x_low
+            # snapshot['high'].x_empty = self.graph['high'].x
+            snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
+            snapshot['high'].z_std = self.graph['high'].z_std
+
+            snapshot['high'].lon = self.graph['high'].lon
+            snapshot['high'].lat = self.graph['high'].lat
+            snapshot['low'].lon = self.graph['low'].lon
+            snapshot['low'].lat = self.graph['low'].lat
+
+            # snapshot['high'].laplacian_eigenvector_pe = self.graph['high'].laplacian_eigenvector_pe     
+
+            # Mask the subgraph to consider only nodes with non-nan target
+            train_nodes = torch.arange(snapshot['high'].num_nodes)[train_mask]
+            subset_dict = {'high': train_nodes}
+            snapshot = snapshot.subgraph(subset_dict)
+            snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
+
+            # Add laplacian positional encodings
+            #graph_high = Data(edge_index=snapshot['high', 'within', 'high'].edge_index, num_nodes=snapshot['high'].num_nodes)
+            #graph_high = transform(graph_high)
+            #snapshot['high'].laplacian_eigenvector_pe = graph_high.laplacian_eigenvector_pe
+
+            return snapshot
+    
+class Dataset_Graph_subgraphs_t(Dataset_Graph_subgraphs):
+
+    def _get_features(self, time_index: int):
+        time_index_x = time_index + 24
+        x_low = self.graph['low'].x[:,time_index_x,:]
+        x_low = x_low.flatten(start_dim=1, end_dim=-1)
+        return x_low
 
 
 class Iterable_Graph(object):
