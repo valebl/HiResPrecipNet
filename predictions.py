@@ -34,6 +34,7 @@ parser.add_argument('--model_type', type=str, default=None)
 parser.add_argument('--model_cl', type=str, default=None) 
 parser.add_argument('--model_reg', type=str, default=None) 
 parser.add_argument('--model_combined', type=str, default=None)
+parser.add_argument('--dataset_name', type=str, default=None) 
 
 parser.add_argument('--lon_min', type=float)
 parser.add_argument('--lon_max', type=float)
@@ -96,15 +97,10 @@ if __name__ == '__main__':
         low_high_graph = pickle.load(f)
 
     pr_gripho = pr_gripho[:, test_start_idx:test_end_idx]
-    pr_reg = torch.ones(pr_gripho.shape) * torch.nan
-    pr_cl = torch.ones(pr_gripho.shape) * torch.nan
-    pr = torch.ones(pr_gripho.shape) * torch.nan
 
     low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input-24:test_end_idx_input,:]    
-    low_high_graph.pr_gripho = pr_gripho
-    low_high_graph.pr_cl = pr_cl
-    low_high_graph.pr_reg = pr_reg
 
+    Dataset_Graph = getattr(dataset, args.dataset_name)
     dataset_graph = Dataset_Graph(targets=None, graph=low_high_graph)
     
     custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
@@ -138,9 +134,9 @@ if __name__ == '__main__':
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write("\nLoading regressor state dict.")
-    model_reg.load_state_dict(checkpoint_reg)
-#    model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
-#        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
+#    model_reg.load_state_dict(checkpoint_reg)
+    model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
+        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
 
     if accelerator is not None:
         model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)
@@ -154,14 +150,30 @@ if __name__ == '__main__':
 
     start = time.time()
 
-    tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args)
+    pr_cl, pr_reg, times = tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
     end = time.time()
 
+    accelerator.wait_for_everyone()
+
+    # Gather the values in *tensor* across all processes and concatenate them on the first dimension. Useful to
+    # regroup the predictions from all processes when doing evaluation.
+
+    times = accelerator.gather(times).squeeze()
+    times, indices = torch.sort(times)
+
+    pr_cl = accelerator.gather(pr_cl).squeeze().swapaxes(0,-1)[:,indices]
+    # pr_cl = accelerator.gather(pr_cl).squeeze()
+    # pr_cl = pr_cl.swapaxes(0,1).swapaxes(1,2)[:,:,indices]
+#     r_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,-1)[:,indices]
+    pr_reg = accelerator.gather(pr_reg).squeeze()
+    pr_reg = pr_reg.swapaxes(0,1).swapaxes(1,2)[:,:,indices]
+
     data = HeteroData()
-    data.pr_gripho = low_high_graph.pr_gripho
-    data.pr_cl = low_high_graph.pr_cl
-    data.pr_reg = low_high_graph.pr_reg
-    data.pr = low_high_graph.pr
+    #data.pr_gripho = pr_gripho
+    data.pr_cl = pr_cl
+    data.pr_reg = pr_reg
+    #data.pr = pr_cl * pr_reg
+    data.times = times
     data["low"].lat = low_high_graph["low"].lat
     data["low"].lon = low_high_graph["low"].lon
     data["high"].lat = low_high_graph["high"].lat
@@ -174,7 +186,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.output_file, 'wb') as f:
-            pickle.dump(data, f)
+            pickle.dump(data.cpu(), f)
 
     
 
