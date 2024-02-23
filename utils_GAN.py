@@ -7,7 +7,7 @@ import torch
 
 from datetime import datetime, timedelta, date
 from torch_geometric.transforms import ToDevice
-from pytorch_forecasting.metrics.quantile import QuantileLoss
+#from pytorch_forecasting.metrics.quantile import QuantileLoss
 
 from datetime import datetime, date
 
@@ -124,16 +124,16 @@ def weighted_mse_loss_ASYM(input_batch, target_batch, weights):
 def MSE_weighted2(y_true, y_pred):
     return torch.mean(torch.exp(2.0 * torch.expm1(y_true)) * (y_pred - y_true)**2)
 
-class modified_mse_quantile_loss():
-    def __init__(self, q=0.85, alpha=0.2):
-        self.mse_loss = nn.MSELoss()
-        self.q = q
-        self.alpha = alpha
-    
-    def __call__(self, prediction_batch, target_batch):
-        loss_quantile = torch.mean(torch.max(self.q*(prediction_batch-target_batch), (1-self.q)*(prediction_batch-target_batch)))
-        loss_mse = self.mse_loss(prediction_batch, target_batch) 
-        return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
+#class modified_mse_quantile_loss():
+#    def __init__(self, q=0.85, alpha=0.2):
+#        self.mse_loss = nn.MSELoss()
+#        self.q = q
+#        self.alpha = alpha
+#    
+#    def __call__(self, prediction_batch, target_batch):
+#        loss_quantile = torch.mean(torch.max(self.q*(prediction_batch-target_batch), (1-self.q)*(prediction_batch-target_batch)))
+#        loss_mse = self.mse_loss(prediction_batch, target_batch) 
+#        return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
     
 
 #-----------------------------------------------------
