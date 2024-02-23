@@ -199,12 +199,12 @@ class Trainer(object):
             start = time.time()
 
             for graph in dataloader_train:
-                #train_mask = graph["high"].train_mask
+                train_mask = graph["high"].train_mask
                 optimizer.zero_grad()
 
                 #-- one ->
-                y_pred = model(graph).squeeze()#[train_mask]
-                y = graph['high'].y#[train_mask]
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
                 loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
                 accelerator.backward(loss)
                 #torch.nn.utils.clip_grad_norm_(model.parameters(),5)
@@ -251,12 +251,11 @@ class Trainer(object):
             # Perform validation step
             for graph in dataloader_val:
                 
-                #train_mask = graph["high"].train_mask
-                optimizer.zero_grad()
+                train_mask = graph["high"].train_mask
 
                 #-- one ->
-                y_pred = model(graph).squeeze()#[train_mask]
-                y = graph['high'].y#[train_mask]
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
                 loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
                 acc = accuracy_binary_one(y_pred, y)
                 acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
@@ -332,7 +331,6 @@ class Trainer(object):
             for graph in dataloader_val:
                 
                 #train_mask = graph["high"].train_mask
-                optimizer.zero_grad()
 
                 y_pred = model(graph).squeeze()#[train_mask]
                 y = graph['high'].y#[train_mask]

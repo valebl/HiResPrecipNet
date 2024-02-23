@@ -45,7 +45,8 @@ parser.add_argument('--first_year_target', type=float)
 
 #-- other
 parser.add_argument('--suffix', type=str, default='')
-parser.add_argument('--use_precomputed_stats', action='store_true', default=True)
+parser.add_argument('--load_stats', action='store_true', default=True)
+parser.add_argument('--no-load_stats', dest='load_stats', action='store_false')
 parser.add_argument('--stats_path', type=str)
 parser.add_argument('--stats_file_high', type=str)
 parser.add_argument('--means_file_low', type=str, default='means.pkl')
@@ -227,7 +228,7 @@ if __name__ == '__main__':
                     lat_dim = len(lat_low)
                     lon_dim = len(lon_low)
                     time_dim = len(ds['time'])
-                    input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # variables, levels, time, lat, lon
+                    input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # time, variables, levels, lat, lon
             input_ds[:, p_idx,:,:,:] = data
 
         elif args.predictors_type == "RegCM":
@@ -257,59 +258,126 @@ if __name__ == '__main__':
     # flip the dataset
     input_ds = np.flip(input_ds, 3) # the origin in the input files is in the top left corner, while we use the bottom left corner    
 
+    ###################################################################################
+    # # standardizing the dataset
+    # with open(args.output_path + args.log_file, 'a') as f:
+    #     f.write(f'\nStandardizing the dataset.')
+    
+    # input_ds_standard = np.zeros((input_ds.shape), dtype=np.float32)
+
+    # if args.use_precomputed_stats:
+    #     with open(args.stats_path+args.means_file_low, 'rb') as f:
+    #         means = pickle.load(f)
+    #     with open(args.stats_path+args.stds_file_low, 'rb') as f:
+    #         stds = pickle.load(f)
+
+    # if not args.mean_std_over_variable_low:
+    #     if not args.use_precomputed_stats:
+    #         means = np.zeros((5))
+    #         stds = np.zeros((5))
+    #         for var in range(5):
+    #             m = np.mean(input_ds[:,var,:,:,:])
+    #             s = np.std(input_ds[:,var,:,:,:])
+    #             input_ds_standard[:,var,:,:,:] = (input_ds[:,var,:,:,:]-m)/s
+    #             means[var] = m
+    #             stds[var] = s
+    #     else:
+    #         for var in range(5):
+    #             input_ds_standard[:,var,:,:,:] = (input_ds[:,var,:,:,:]-means[var])/stds[var]    
+    # else:
+    #     if not args.use_precomputed_stats:
+    #         means = np.zeros((5,5))
+    #         stds = np.zeros((5,5))
+    #         for var in range(5):
+    #             for lev in range(5):
+    #                 m = np.mean(input_ds[:,var,lev,:,:])
+    #                 s = np.std(input_ds[:,var,lev,:,:])
+    #                 input_ds_standard[:,var,lev,:,:] = (input_ds[:,var,lev,:,:]-m)/s
+    #                 means[var, lev] = m
+    #                 stds[var, lev] = s
+    #     else:
+    #         for var in range(5):
+    #             for lev in range(5):
+    #                 input_ds_standard[:,var,lev,:,:] = (input_ds[:,var,lev,:,:]-means[var, lev])/stds[var, lev]
+
+    # if not args.use_precomputed_stats:
+    #     with open(args.output_path + "means.pkl", 'wb') as f:
+    #         pickle.dump(means, f)
+    #     with open(args.output_path + "stds.pkl", 'wb') as f:
+    #         pickle.dump(stds, f)
+    #     
+    # input_ds = torch.tensor(input_ds)
+
+    # input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
+    # input_ds = torch.flatten(input_ds, end_dim=1)   # num_nodes, time, vars, levels
+
+    # input_ds = torch.flatten(input_ds, start_dim=2, end_dim=-1)
+
+    # input_ds = # variables, levels, time, lat, lon
+
+    input_ds_diff = np.zeros((input_ds.shape[0], input_ds.shape[1], 4, input_ds.shape[3], input_ds.shape[4]), dtype=np.float32)
+    input_ds_diff[:,:,0,:,:] = input_ds[:,:,1,:,:] - input_ds[:,:,0,:,:]
+    input_ds_diff[:,:,1,:,:] = input_ds[:,:,2,:,:] - input_ds[:,:,1,:,:]
+    input_ds_diff[:,:,2,:,:] = input_ds[:,:,3,:,:] - input_ds[:,:,2,:,:]
+    input_ds_diff[:,:,3,:,:] = input_ds[:,:,4,:,:] - input_ds[:,:,3,:,:]
+
     # standardizing the dataset
     with open(args.output_path + args.log_file, 'a') as f:
         f.write(f'\nStandardizing the dataset.')
-    
-    input_ds_standard = np.zeros((input_ds.shape), dtype=np.float32)
-    
-    if args.use_precomputed_stats:
+
+    if args.load_stats:
         with open(args.stats_path+args.means_file_low, 'rb') as f:
             means = pickle.load(f)
         with open(args.stats_path+args.stds_file_low, 'rb') as f:
             stds = pickle.load(f)
 
-    if not args.mean_std_over_variable_low:
-        if not args.use_precomputed_stats:
+    if args.mean_std_over_variable_low:
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write(f'\nComputing statistics over variables.')
+        if not args.load_stats:
             means = np.zeros((5))
             stds = np.zeros((5))
             for var in range(5):
-                m = np.mean(input_ds[:,var,:,:,:])
-                s = np.std(input_ds[:,var,:,:,:])
-                input_ds_standard[:,var,:,:,:] = (input_ds[:,var,:,:,:]-m)/s
+                m = np.mean(input_ds_diff[:,var,:,:,:])
+                s = np.std(input_ds_diff[:,var,:,:,:])
+                input_ds_diff[:,var,:,:,:] = (input_ds_diff[:,var,:,:,:]-m)/s
                 means[var] = m
                 stds[var] = s
         else:
             for var in range(5):
-                input_ds_standard[:,var,:,:,:] = (input_ds[:,var,:,:,:]-means[var])/stds[var]    
+                input_ds_diff[:,var,:,:,:] = (input_ds_diff[:,var,:,:,:]-means[var])/stds[var]    
     else:
-        if not args.use_precomputed_stats:
-            means = np.zeros((5,5))
-            stds = np.zeros((5,5))
+        with open(args.output_path + args.log_file, 'a') as f:
+            f.write(f'\nComputing statistics over variables and levels.')
+        if not args.load_stats:
+            means = np.zeros((5,4))
+            stds = np.zeros((5,4))
             for var in range(5):
-                for lev in range(5):
-                    m = np.mean(input_ds[:,var,lev,:,:])
-                    s = np.std(input_ds[:,var,lev,:,:])
-                    input_ds_standard[:,var,lev,:,:] = (input_ds[:,var,lev,:,:]-m)/s
+                for lev in range(4):
+                    m = np.mean(input_ds_diff[:,var,lev,:,:])
+                    s = np.std(input_ds_diff[:,var,lev,:,:])
+                    input_ds_diff[:,var,lev,:,:] = (input_ds_diff[:,var,lev,:,:]-m)/s
                     means[var, lev] = m
                     stds[var, lev] = s
         else:
             for var in range(5):
-                for lev in range(5):
-                    input_ds_standard[:,var,lev,:,:] = (input_ds[:,var,lev,:,:]-means[var, lev])/stds[var, lev]
+                for lev in range(4):
+                    input_ds_diff[:,var,lev,:,:] = (input_ds_diff[:,var,lev,:,:]-means[var, lev])/stds[var, lev]
 
-    if not args.use_precomputed_stats:
+    if not args.load_stats:
         with open(args.output_path + "means.pkl", 'wb') as f:
             pickle.dump(means, f)
         with open(args.output_path + "stds.pkl", 'wb') as f:
             pickle.dump(stds, f)
     
-    input_ds_standard = torch.tensor(input_ds_standard)
+    input_ds_diff = torch.tensor(input_ds_diff)
 
-    input_ds_standard = torch.permute(input_ds_standard, (3,4,0,1,2)) # lat, lon, time, vars, levels
-    input_ds_standard = torch.flatten(input_ds_standard, end_dim=1)   # num_nodes, time, vars, levels
+    input_ds_diff = torch.permute(input_ds_diff, (3,4,0,1,2)) # lat, lon, time, vars, levels
+    input_ds_diff = torch.flatten(input_ds_diff, end_dim=1)   # num_nodes, time, vars, levels
 
-    input_ds_standard = torch.flatten(input_ds_standard, start_dim=2, end_dim=-1)
+    input_ds_diff = torch.flatten(input_ds_diff, start_dim=2, end_dim=-1)
+
+    #####################################################################################
 
     with open(args.output_path + args.log_file, 'a') as f:
         f.write(f'\nPreprocessing of low resolution data finished.')
@@ -400,7 +468,7 @@ if __name__ == '__main__':
     #----------- STANDARDISE LON LAT AND Z -----------
     #-------------------------------------------------
     
-    if args.use_precomputed_stats:
+    if args.load_stats:
         with open(args.stats_path + args.stats_file_high, 'rb') as f:
             precomputed_stats = pickle.load(f)
         mean_z = precomputed_stats[0]
@@ -410,6 +478,9 @@ if __name__ == '__main__':
         mean_z = z_high.mean()
         std_z = z_high.std()
         mode = "local"
+        stats_z = torch.tensor([mean_z, std_z])
+        with open(args.output_path + "stats_z.pkl", 'wb') as f:
+            pickle.dump(stats_z, f)
 
     write_log(f"\nUsing {mode} statistics for z: mean={mean_z}, std={std_z}", args)
     z_high_std = (z_high - mean_z) / std_z
@@ -440,7 +511,10 @@ if __name__ == '__main__':
     #--------------- TO GRAPH ATTRIBUTES -----------------
     #-----------------------------------------------------
 
-    low_high_graph['low'].x = input_ds_standard
+    ####################################
+    # low_high_graph['low'].x = input_ds_standard
+    low_high_graph['low'].x = input_ds_diff
+    ####################################
     low_high_graph['low'].lat = lat_low
     low_high_graph['low'].lon = lon_low
 
@@ -459,7 +533,10 @@ if __name__ == '__main__':
     high_graph = transform(high_graph)
     low_high_graph['high'].laplacian_eigenvector_pe = high_graph.laplacian_eigenvector_pe
 
-    with open(args.output_path + 'low_high_graph' + args.suffix + '.pkl', 'wb') as f:
+    ####################################
+    # with open(args.output_path + 'low_high_graph' + args.suffix + '.pkl', 'wb') as f:
+    with open(args.output_path + 'low_high_graph_diff' + args.suffix + '.pkl', 'wb') as f:
+    ####################################
         pickle.dump(low_high_graph, f)
 
     write_log(f"\nIn total, preprocessing took {time.time() - time_start} seconds", args)            

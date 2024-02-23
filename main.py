@@ -139,11 +139,8 @@ if __name__ == '__main__':
                                                                       args.train_day_start, args.train_year_end, args.train_month_end,
                                                                       args.train_day_end, args.first_year)
     train_start_idx = max(train_start_idx,24)
-    
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f"\nTrain from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
-                    f"{int(args.train_day_end)}/{int(args.train_month_end)}/{int(args.train_year_end)}. Idxs from {train_start_idx} to {train_end_idx}.")
+
+    val_start_idx, val_end_idx = date_to_idxs(2007, 1, 1, 2007, 12, 31, 2001)
 
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
@@ -152,8 +149,8 @@ if __name__ == '__main__':
         target_train = pickle.load(f)
 
     # Define input and target
-    low_high_graph['low'].x = low_high_graph['low'].x[:,train_start_idx-24:train_end_idx,:]
-    target_train = target_train[:,train_start_idx:train_end_idx]
+    low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx)-24:max(train_end_idx, val_end_idx),:]
+    target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]
 
 
     # Define a mask to ignore time indexes with all nan values
@@ -168,17 +165,38 @@ if __name__ == '__main__':
         with open(args.output_path+args.log_file, 'a') as f:
             f.write(f"\nAfter removing all nan time indexes, {mask_not_all_nan.sum()}" +
                     f" time indexes are considered ({(mask_not_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
+            
+    # Fix the idxs
+    idxs = torch.arange(initial_time_dim) # from 0 to the number of idxs considered
 
-    low_high_graph['low'].x = low_high_graph['low'].x[:,mask_not_all_nan]
-    target_train = target_train[:,mask_not_all_nan[24:]]
+    if train_start_idx > val_end_idx:
+        offset = val_start_idx
+        train_idxs_list = [*range(train_start_idx - offset, train_end_idx - offset)]
+        val_idxs_list = [*range(val_start_idx - offset, val_end_idx - offset)]
+    else:
+        offset = train_start_idx
+        train_idxs_list = [*range(train_start_idx - offset, val_start_idx - offset)] + [*range(val_end_idx - offset,  train_end_idx - offset)]
+        val_idxs_list = [*range(val_start_idx - offset, val_end_idx - offset)]
+
+    train_idxs = torch.tensor(train_idxs_list)[mask_not_all_nan[train_idxs_list]]
+    val_idxs = torch.tensor(val_idxs_list)[mask_not_all_nan[val_idxs_list]]
+    
+    if accelerator is None or accelerator.is_main_process:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"\nTrain from {int(args.train_day_start)}/{int(args.train_month_start)}/{int(args.train_year_start)} to " +
+                    f"{int(args.train_day_end)}/{int(args.train_month_end)}/{int(args.train_year_end)} with validation 01/01/2007 to 31/12/2007" +
+                    f"Idxs from {train_start_idx} to {val_start_idx} and from {val_end_idx} to {train_end_idx}.")
+
+    #low_high_graph['low'].x = low_high_graph['low'].x[:,mask_not_all_nan]
+    #target_train = target_train[:,mask_not_all_nan[24:]]
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     
     if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "weighted_mse_loss_ASYM":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
-        weights_reg = weights_reg[:,train_start_idx:train_end_idx]
-        weights_reg = weights_reg[:,mask_not_all_nan[24:]]
+        weights_reg = weights_reg[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]
+        #weights_reg = weights_reg[:,mask_not_all_nan[24:]]
 
         if accelerator is None or accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -196,18 +214,18 @@ if __name__ == '__main__':
     custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
         
     #-- split into trainset and testset
-    generator=torch.Generator().manual_seed(42)
-    len_trainset = int(len(dataset_graph) * args.pct_trainset)
-    len_validationset = len(dataset_graph) - len_trainset
-    dataset_graph_train, dataset_graph_val = torch.utils.data.random_split(
-        dataset_graph, lengths=(len_trainset, len_validationset), generator=generator)
+    # generator=torch.Generator().manual_seed(42)
+    # len_trainset = int(len(dataset_graph) * args.pct_trainset)
+    # len_validationset = len(dataset_graph) - len_trainset
+    dataset_graph_train = torch.utils.data.Subset(dataset_graph, train_idxs)
+    dataset_graph_val = torch.utils.data.Subset(dataset_graph, val_idxs)
 
     sampler_graph_train = Iterable_Graph(dataset_graph=dataset_graph_train, shuffle=True)
     sampler_graph_val = Iterable_Graph(dataset_graph=dataset_graph_val, shuffle=True)
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f'\nTrainset size = {len_trainset}, validationset size = {len_validationset}.')
+            f.write(f'\nTrainset size = {len(dataset_graph_train)}, validationset size = {len(sampler_graph_val)}.')
 
     dataloader_train = torch.utils.data.DataLoader(dataset_graph_train, batch_size=args.batch_size, num_workers=0,
                     sampler=sampler_graph_train, collate_fn=custom_collate_fn)
