@@ -48,7 +48,7 @@ class HiResPrecipNet(nn.Module):
 class HiResPrecipNet_generator(nn.Module):
     
     def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
-        super(HiResPrecipNet, self).__init__()
+        super(HiResPrecipNet_generator, self).__init__()
 
         self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
         
@@ -89,7 +89,7 @@ class HiResPrecipNet_generator(nn.Module):
 class HiResPrecipNet_discriminator(nn.Module):
     
     def __init__(self, high_in=1, high_out=64):
-        super(HiResPrecipNet, self).__init__()
+        super(HiResPrecipNet_discriminator, self).__init__()
         
         self.processor = geometric_nn.Sequential('x, edge_index', [
             (geometric_nn.BatchNorm(high_in), 'x -> x'),
@@ -114,11 +114,14 @@ class HiResPrecipNet_discriminator(nn.Module):
             nn.ReLU(),
             nn.Linear(high_out, 32),
             nn.ReLU(),
-            nn.Linear(32, 1)
+            nn.Linear(32, 1),
+            nn.Sigmoid()
             )
 
-    def forward(self, data):        
-        encod_high = self.processor(data.y, data.edge_index_dict[('high','within','high')])
-        encod_graph = global_mean_pool(encod_high, data.batch)  # [batch_size, hidden_channels]
+    def forward(self, data):       
+        encod_high = self.processor(data['high'].y, data.edge_index_dict[('high','within','high')])
+        encod_graph = global_mean_pool(encod_high, data['high'].batch)  # [batch_size, hidden_channels]
         y_pred = self.predictor(encod_graph)
         return y_pred
+
+
