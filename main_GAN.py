@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 from dataset_GAN import Iterable_Graph
-import dataset_GAN as dataset
+from dataset_GAN import Dataset_Graph_subgraphs as Dataset_Graph
 import time
 import argparse
 import sys
@@ -115,8 +115,8 @@ if __name__ == '__main__':
     model_D = Model_D()
 
     # Loss
-    loss_fn_D = nn.CrossEntropyLoss()
-    loss_fn_G = nn.CrossEntropyLoss()   
+    loss_fn_D = nn.BCELoss()
+    loss_fn_G = nn.BCELoss()   
 
 #-----------------------------------------------------
 #-------------- DATASET AND DATALOADER ---------------
@@ -156,17 +156,22 @@ if __name__ == '__main__':
     # Fix the idxs
     idxs = torch.arange(initial_time_dim) # from 0 to the number of idxs considered
 
-    if train_start_idx > val_end_idx:
-        offset = val_start_idx
-        train_idxs_list = [*range(train_start_idx - offset, train_end_idx - offset)]
-        val_idxs_list = [*range(val_start_idx - offset, val_end_idx - offset)]
-    else:
-        offset = train_start_idx
-        train_idxs_list = [*range(train_start_idx - offset, val_start_idx - offset)] + [*range(val_end_idx - offset,  train_end_idx - offset)]
-        val_idxs_list = [*range(val_start_idx - offset, val_end_idx - offset)]
+    # For now we only consider the case with 2007 validation year
+    offset = train_start_idx
 
-    train_idxs = torch.tensor(train_idxs_list)[mask_not_all_nan[train_idxs_list]]
-    val_idxs = torch.tensor(val_idxs_list)[mask_not_all_nan[val_idxs_list]]
+    train_idxs = []
+    val_idxs = []
+    t_not_nan = 0
+    for t, m in enumerate(mask_not_all_nan):
+        if m:
+            if (t < val_start_idx - offset) or (t >= val_end_idx - offset):
+                train_idxs.append(t_not_nan)
+            else:
+                val_idxs.append(t_not_nan)
+            t_not_nan += 1
+
+    train_idxs = torch.tensor(train_idxs)
+    val_idxs = torch.tensor(val_idxs)
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
@@ -177,8 +182,6 @@ if __name__ == '__main__':
     #low_high_graph['low'].x = low_high_graph['low'].x[:,mask_not_all_nan]
     #target_train = target_train[:,mask_not_all_nan[24:]]
 
-    Dataset_Graph = getattr(dataset, args.dataset_name)
-    
     if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "weighted_mse_loss_ASYM":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)

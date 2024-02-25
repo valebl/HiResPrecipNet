@@ -96,7 +96,7 @@ class Dataset_Graph(Dataset):
             elif value.shape[0] == self.graph['low'].x.shape[0]:
                 snapshot['high'][key] = value
        
-        snapshot['high'].y = y
+        snapshot['high'].y = y.unsqueeze(-1)
         snapshot['high'].train_mask = train_mask
         snapshot.num_nodes = self.graph.num_nodes
         snapshot['high'].num_nodes = self.graph['high'].num_nodes
@@ -173,7 +173,7 @@ class Dataset_Graph_subgraphs(Dataset_Graph):
                 elif value.shape[0] == self.graph['low'].x.shape[0]:
                     snapshot['high'][key] = value
         
-            snapshot['high'].y = y
+            snapshot['high'].y = y.unsqueeze(-1)
             # snapshot['high'].train_mask = train_mask
             snapshot.num_nodes = self.graph.num_nodes
             snapshot['high'].num_nodes = self.graph['high'].num_nodes
@@ -200,7 +200,7 @@ class Dataset_Graph_subgraphs(Dataset_Graph):
             train_nodes = torch.arange(snapshot['high'].num_nodes)[train_mask]
             subset_dict = {'high': train_nodes}
             snapshot = snapshot.subgraph(subset_dict)
-            snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
+            #snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
 
             # Add laplacian positional encodings
             #graph_high = Data(edge_index=snapshot['high', 'within', 'high'].edge_index, num_nodes=snapshot['high'].num_nodes)

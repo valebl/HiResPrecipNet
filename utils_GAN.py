@@ -319,23 +319,21 @@ class Trainer(object):
             start = time.time()
 
             for graph_real, graph_fake in zip(dataloader_train_real, dataloader_train_fake):
-                train_mask_real = graph_real["high"].train_mask
-                train_mask_fake = graph_fake["high"].train_mask
                 ##--- Part 1 - Train the Discriminator ---##
                 optimizer_D.zero_grad()
-                output = model_D(graph_real[train_mask_real]).squeeze()
-                loss_D_real = loss_fn_D(output, torch.ones(output.shape)*real_label)
+                output = model_D(graph_real).squeeze()
+                loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_D_real.backward()
-                fake = model_G(graph_fake)
-                output = model_D(fake[train_mask_fake]).squeeze()
-                loss_D_fake = loss_fn_D(output, torch.ones(output.shape)*fake_label)
-                loss_D_fake.backward()
+                graph_fake['high'].y = model_G(graph_fake)
+                output = model_D(graph_fake).squeeze()
+                loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
+                loss_D_fake.backward(retain_graph=True)
                 optimizer_D.step()
                 loss_D = loss_D_real + loss_D_fake
                 ##--- Part 2 - Train the Generator ---##
                 optimizer_G.zero_grad()
-                output = model_D(fake[train_mask_fake]).squeeze()
-                loss_G = loss_fn_G(output, torch.ones(output.shape)*real_label)
+                output = model_D(graph_fake).squeeze()
+                loss_G = loss_fn_G(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_G.backward()
                 optimizer_G.step()
 
@@ -343,7 +341,7 @@ class Trainer(object):
                 accelerator.log({'epoch':epoch, 'loss D iteration': loss_meter_D.val, 'loss D avg': loss_meter_D.avg})
 
                 loss_meter_G.update(val=loss_G.item(), n=1)    
-                accelerator.log({'epoch':epoch, 'loss G iteration': loss_meter_G.val, 'loss D avg': loss_meter_G.avg})
+                accelerator.log({'epoch':epoch, 'loss G iteration': loss_meter_G.val, 'loss G avg': loss_meter_G.avg})
 
             end = time.time()
             accelerator.log({'loss D epoch': loss_meter_D.avg})
@@ -363,18 +361,16 @@ class Trainer(object):
             # Perform validation step
             model_D.eval()
             model_G.eval()
-            train_mask_real = graph_real["high"].train_mask
-            train_mask_fake = graph_fake["high"].train_mask
             for graph_real, graph_fake in zip(dataloader_val_real, dataloader_val_fake):
                 ##--- Part 1 - Discriminator ---##
-                output = model_D(graph_real[train_mask_real]).squeeze()
-                loss_D_real = loss_fn_D(output, torch.ones(output.shape)*real_label)
-                fake = model_G(graph_fake)
-                output = model_D(fake[train_mask_fake]).squeeze()
-                loss_D_fake = loss_fn_D(output, torch.ones(output.shape)*fake_label)
+                output = model_D(graph_real).squeeze()
+                loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
+                graph_fake['high'].y = model_G(graph_fake)
+                output = model_D(graph_fake).squeeze()
+                loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
                 loss_D = loss_D_real + loss_D_fake
                 ##--- Part 2 - Generator ---##
-                loss_G = loss_fn_G(output, torch.ones(output.shape)*real_label)
+                loss_G = loss_fn_G(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
 
                 loss_meter_val_D.update(val=loss_D.item(), n=1)    
 
