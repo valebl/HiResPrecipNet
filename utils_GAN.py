@@ -589,3 +589,4 @@ class Tester(object):
 
         return loss_meter.avg
 
+
