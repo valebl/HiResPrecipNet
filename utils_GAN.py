@@ -419,7 +419,7 @@ class Trainer(object):
                 ##--- Part 2 - Generator ---##
                 loss_G_adv = loss_fn_G_adv(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_G_rec = loss_fn_G_rec(graph_fake['high'].y, graph_fake_ground_truth)
-                loss_G = loss_G_adv + alpha * loss_G_rec
+                loss_G = loss_G_adv + gamma * loss_G_rec
 
                 loss_meter_val_D.update(val=loss_D.item(), n=1)    
 
