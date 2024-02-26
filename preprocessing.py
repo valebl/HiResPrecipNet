@@ -67,12 +67,12 @@ if __name__ == '__main__':
     ##---------- PREPROCESSING LOW RES DATA ------------##
     ######################################################
 
-    if args.predictors_type == "ERA5":
+    if args.predictors_type == "era5":
         params = ['q', 't', 'u', 'v', 'z']
-    elif args.predictors_type == "RegCM":
+    elif args.predictors_type == "regcm":
         params = ['hus', 'ta', 'ua', 'va', 'zg']
     else:
-        raise Exception("args.predictors_type should be either ERA5 or RegCM")
+        raise Exception("args.predictors_type should be either era5 or regcm")
     
     n_params = len(params)
  
