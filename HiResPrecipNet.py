@@ -6,7 +6,7 @@ import torch
 
 class HiResPrecipNet(nn.Module):
     
-    def __init__(self, low_in=5*5*4, high_in=1, low2high_out=64, high_out=64):
+    def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
         super(HiResPrecipNet, self).__init__()
 
         self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
