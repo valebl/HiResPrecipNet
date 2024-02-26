@@ -308,7 +308,7 @@ class Trainer(object):
         return model
 
     def train_gan(self, model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
-                  loss_fn_G_adv, loss_fn_G_rec, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args, epoch_start=0, alpha=1):
+                  loss_fn_G_adv, loss_fn_G_rec, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args, epoch_start=0, gamma=10):
 
         real_label = 1
         fake_label = 0
@@ -365,7 +365,7 @@ class Trainer(object):
                 output = model_D(graph_fake).squeeze()
                 loss_G_adv = loss_fn_G_adv(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_G_rec = loss_fn_G_rec(graph_fake['high'].y, graph_fake_ground_truth)
-                loss_G = loss_G_adv + alpha * loss_G_rec
+                loss_G = loss_G_adv + gamma * loss_G_rec
                 loss_G.backward()
                 optimizer_G.step()
                 
@@ -411,7 +411,7 @@ class Trainer(object):
                 ##--- Part 1 - Discriminator ---##
                 output = model_D(graph_real).squeeze()
                 loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
-                y_graph_fake = graph_fake['high'].y.copy()
+                y_graph_fake = graph_fake['high'].y.clone()
                 graph_fake['high'].y = model_G(graph_fake)
                 output = model_D(graph_fake).squeeze()
                 loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
