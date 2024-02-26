@@ -13,7 +13,7 @@ import sys
 import os
 import dataset
 
-import HiResPrecipNet as models
+import HiResPrecipNet_GAN as models
 import utils_GAN
 from utils_GAN import Trainer, Tester, date_to_idxs, load_checkpoint, check_freezed_layers, Reconstruction_loss
 from accelerate import Accelerator
