@@ -143,7 +143,7 @@ class Reconstruction_loss():
 
     def __call__(self, prediction_batch, target_batch):
         loss_quantile = torch.max(self.q*torch.clamp(prediction_batch-target_batch, min=0), (1-self.q)*torch.clamp(prediction_batch-target_batch, min=0))
-        loss_mae = torch.abs(prediction_batch, target_batch) 
+        loss_mae = torch.abs(prediction_batch - target_batch) 
         return torch.mean(loss_mae + loss_quantile)
 
 
