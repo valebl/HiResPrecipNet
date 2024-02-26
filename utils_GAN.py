@@ -349,7 +349,7 @@ class Trainer(object):
                 loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_D_real.backward()
                 ## 1b Fake examples
-                y_graph_fake = graph_fake['high'].y.copy()      # save ground truth to use in reconstruction loss
+                y_graph_fake = graph_fake['high'].y.clone()      # save ground truth to use in reconstruction loss
                 graph_fake['high'].y = model_G(graph_fake)      # derive fake graph from Generator
                 output = model_D(graph_fake).squeeze()
                 loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
