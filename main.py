@@ -240,9 +240,11 @@ if __name__ == '__main__':
     
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
 
+
 #-----------------------------------------------------
 #------------------ LOAD PARAMETERS ------------------
 #-----------------------------------------------------
+
 
     epoch_start=0
     
