@@ -169,10 +169,10 @@ if __name__ == '__main__':
     #pr_reg = pr_reg.swapaxes(0,1).swapaxes(1,2)[:,:,indices]
 
     data = HeteroData()
-    #data.pr_gripho = pr_gripho
+    data.pr_gripho = pr_gripho
     data.pr_cl = pr_cl
-    #data.pr_reg = pr_reg
-    #data.pr = pr_cl * pr_reg
+    data.pr_reg = pr_reg
+    data.pr = pr_cl * pr_reg
     data.times = times
     data["low"].lat = low_high_graph["low"].lat
     data["low"].lon = low_high_graph["low"].lon
