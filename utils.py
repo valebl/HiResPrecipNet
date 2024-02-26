@@ -7,7 +7,7 @@ import torch
 
 from datetime import datetime, timedelta, date
 from torch_geometric.transforms import ToDevice
-from pytorch_forecasting.metrics.quantile import QuantileLoss
+#from pytorch_forecasting.metrics.quantile import QuantileLoss
 
 from datetime import datetime, date
 

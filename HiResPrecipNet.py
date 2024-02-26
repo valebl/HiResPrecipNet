@@ -99,12 +99,6 @@ class HiResPrecipNet_discriminator(nn.Module):
             (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
             (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
             nn.ReLU(),
-            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
-            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
-            nn.ReLU(),
-            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
-            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
-            nn.ReLU(),
             (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
             nn.ReLU(),
             ])

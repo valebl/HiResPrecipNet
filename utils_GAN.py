@@ -136,6 +136,17 @@ def MSE_weighted2(y_true, y_pred):
 #        return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
     
 
+class Reconstruction_loss():
+    def __init__(self, q=0.85, alpha=0.2):
+        self.q = q
+        self.alpha = alpha
+
+    def __call__(self, prediction_batch, target_batch):
+        loss_quantile = torch.max(self.q*torch.clamp(prediction_batch-target_batch, min=0), (1-self.q)*torch.clamp(prediction_batch-target_batch, min=0))
+        loss_mae = torch.abs(prediction_batch, target_batch) 
+        return torch.mean(loss_mae + loss_quantile)
+
+
 #-----------------------------------------------------
 #------------------ LOAD PARAMETERS ------------------
 #-----------------------------------------------------
@@ -296,8 +307,8 @@ class Trainer(object):
             #    torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}.pth")
         return model
 
-    def train_reg(self, model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
-                  loss_fn_G, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args, epoch_start=0):
+    def train_gan(self, model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
+                  loss_fn_G_adv, loss_fn_G_rec, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args, epoch_start=0, alpha=1):
 
         real_label = 1
         fake_label = 0
@@ -311,41 +322,76 @@ class Trainer(object):
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer_G.param_groups[0]['lr']:.8f}")
+            
+            ## Discriminator
             loss_meter_D = AverageMeter()
+            loss_meter_D_real = AverageMeter()
+            loss_meter_D_fake = AverageMeter()
+            ## Generator
             loss_meter_G = AverageMeter()
+            loss_meter_G_adv = AverageMeter()
+            loss_meter_G_rec = AverageMeter()
+            ## Validation
             loss_meter_val_D = AverageMeter()
             loss_meter_val_G = AverageMeter()
             
             start = time.time()
 
             for graph_real, graph_fake in zip(dataloader_train_real, dataloader_train_fake):
+                
+                ##----------------------------------------##
                 ##--- Part 1 - Train the Discriminator ---##
+                ##----------------------------------------##
+                
                 optimizer_D.zero_grad()
+                ## 1a Real examples
                 output = model_D(graph_real).squeeze()
                 loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_D_real.backward()
-                graph_fake['high'].y = model_G(graph_fake)
+                ## 1b Fake examples
+                y_graph_fake = graph_fake['high'].y.copy()      # save ground truth to use in reconstruction loss
+                graph_fake['high'].y = model_G(graph_fake)      # derive fake graph from Generator
                 output = model_D(graph_fake).squeeze()
                 loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
                 loss_D_fake.backward(retain_graph=True)
-                optimizer_D.step()
-                loss_D = loss_D_real + loss_D_fake
-                ##--- Part 2 - Train the Generator ---##
+                optimizer_D.step()    
+                loss_D = loss_D_real + loss_D_fake  
+                
+                ##---------------------------------------##
+                ##--- Part 2 - Train the Generator ------##
+                ##---------------------------------------##
+                
                 optimizer_G.zero_grad()
                 output = model_D(graph_fake).squeeze()
-                loss_G = loss_fn_G(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
+                loss_G_adv = loss_fn_G_adv(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
+                loss_G_rec = loss_fn_G_rec(output, y_graph_fake)
+                loss_G = loss_G_adv + alpha * loss_G_rec
                 loss_G.backward()
                 optimizer_G.step()
-
+                
+                ##---------------------------------------##
+                ##--- Log on wandb ----------------------##
+                ##---------------------------------------##
+                
+                ## Discriminator                
                 loss_meter_D.update(val=loss_D.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss D iteration': loss_meter_D.val, 'loss D avg': loss_meter_D.avg})
+                loss_meter_D_real.update(val=loss_D_real.item(), n=1)    
+                loss_meter_D_fake.update(val=loss_D_fake.item(), n=1)    
 
+                ## Generator
                 loss_meter_G.update(val=loss_G.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss G iteration': loss_meter_G.val, 'loss G avg': loss_meter_G.avg})
+                loss_meter_G_adv.update(val=loss_G_adv.item(), n=1)    
+                loss_meter_G_rec.update(val=loss_G_rec.item(), n=1)    
 
             end = time.time()
             accelerator.log({'loss D epoch': loss_meter_D.avg})
+            accelerator.log({'loss D real epoch': loss_meter_D_real.avg})
+            accelerator.log({'loss D fake epoch': loss_meter_D_fake.avg})
             accelerator.log({'loss G epoch': loss_meter_G.avg})
+            accelerator.log({'loss G adversarial epoch': loss_meter_G_adv.avg})
+            accelerator.log({'loss G reconstruction epoch': loss_meter_G_rec.avg})
 
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
@@ -365,12 +411,15 @@ class Trainer(object):
                 ##--- Part 1 - Discriminator ---##
                 output = model_D(graph_real).squeeze()
                 loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
+                y_graph_fake = graph_fake['high'].y.copy()
                 graph_fake['high'].y = model_G(graph_fake)
                 output = model_D(graph_fake).squeeze()
                 loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
                 loss_D = loss_D_real + loss_D_fake
                 ##--- Part 2 - Generator ---##
-                loss_G = loss_fn_G(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
+                loss_G_adv = loss_fn_G_adv(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
+                loss_G_rec = loss_fn_G_rec(output, y_graph_fake)
+                loss_G = loss_G_adv + alpha * loss_G_rec
 
                 loss_meter_val_D.update(val=loss_D.item(), n=1)    
 

@@ -15,7 +15,7 @@ import dataset
 
 import HiResPrecipNet as models
 import utils_GAN
-from utils_GAN import Trainer, Tester, date_to_idxs, load_checkpoint, check_freezed_layers
+from utils_GAN import Trainer, Tester, date_to_idxs, load_checkpoint, check_freezed_layers, Reconstruction_loss
 from accelerate import Accelerator
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -116,7 +116,8 @@ if __name__ == '__main__':
 
     # Loss
     loss_fn_D = nn.BCELoss()
-    loss_fn_G = nn.BCELoss()   
+    loss_fn_G_adv = nn.BCELoss()   
+    loss_fn_G_rec = Reconstruction_loss()
 
 #-----------------------------------------------------
 #-------------- DATASET AND DATALOADER ---------------
@@ -279,8 +280,8 @@ if __name__ == '__main__':
     #model.downscaler.lin_r.weight.requires_grad = False
     
     if accelerator is not None:
-        model_D, model_G, optimizer_D, optimizer_G, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, lr_scheduler_G, lr_scheduler_D, loss_fn_G, loss_fn_D = accelerator.prepare(
-            model_D, model_G, optimizer_D, optimizer_G, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, lr_scheduler_G, lr_scheduler_D, loss_fn_G, loss_fn_D)
+        model_D, model_G, optimizer_D, optimizer_G, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, lr_scheduler_G, lr_scheduler_D, loss_fn_G_adv, loss_fn_G_rec, loss_fn_D = accelerator.prepare(
+            model_D, model_G, optimizer_D, optimizer_G, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, lr_scheduler_G, lr_scheduler_D, loss_fn_G_adv, loss_fn_G_rec, loss_fn_D)
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write("\nUsing accelerator to prepare model, optimizer, dataloader and loss_fn...")
@@ -312,12 +313,8 @@ if __name__ == '__main__':
     start = time.time()
 
     trainer = Trainer()
-    if args.model_type == "cl":
-        model_G, model_D = trainer.train_cl(model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
-                  loss_fn_G, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args)
-    elif args.model_type == "reg":
-        model_G, model_D = trainer.train_reg(model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
-                  loss_fn_G, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args,)
+    model_G, model_D = trainer.train_gan(model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
+              loss_fn_G_rec, loss_fn_G_adv, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args)
         
     end = time.time()
 
