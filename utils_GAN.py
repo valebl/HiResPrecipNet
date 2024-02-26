@@ -411,7 +411,7 @@ class Trainer(object):
                 ##--- Part 1 - Discriminator ---##
                 output = model_D(graph_real).squeeze()
                 loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
-                y_graph_fake = graph_fake['high'].y.clone()
+                graph_fake_ground_truth = graph_fake['high'].y.clone()
                 graph_fake['high'].y = model_G(graph_fake)
                 output = model_D(graph_fake).squeeze()
                 loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
