@@ -167,8 +167,6 @@ if __name__ == '__main__':
                     f" time indexes are considered ({(mask_not_all_nan.sum() / initial_time_dim * 100):.1f} % of initial ones).")
             
     # Fix the idxs
-    idxs = torch.arange(initial_time_dim) # from 0 to the number of idxs considered
-
     if train_start_idx > val_end_idx:
         offset = val_start_idx
         train_idxs_list = [*range(train_start_idx - offset, train_end_idx - offset)]
@@ -254,30 +252,6 @@ if __name__ == '__main__':
                 f.write("\nContinuing the training.")
         accelerator.load_state(args.checkpoint_ctd)
         epoch_start = torch.load(args.checkpoint_ctd+"epoch")["epoch"] + 1
-        #checkpoint = torch.load(args.checkpoint_ctd) 
-        #model = load_checkpoint(model, checkpoint, args.output_path, args.log_file, None,
-        #    net_names=["low2high.", "low_net.", "high_net."], fine_tuning=True, device=accelerator.device)
-        #epoch_start = checkpoint["epoch"] + 1
-
-    #-- define the optimizer and trainable parameters
-    #if args.ctd_training:
-    #    with open(args.output_path+args.log_file, 'a') as f:
-    #        f.write("\nLoading optimizer paramaters.")
-    #    optimizer.load_state_dict(checkpoint["optimizer"])
-    
-    #if args.ctd_training:
-    #    optimizer.load_state_dict(checkpoint["optimizer"]
-
-    #check_freezed_layers(model, args.output_path, args.log_file, accelerator)
-
-    #total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    #if accelerator is None or accelerator.is_main_process: 
-    #    with open(args.output_path+args.log_file, 'a') as f:
-    #        f.write(f"\nTotal number of trainable parameters: {total_params}.")
-
-    
-    # Freeze the parameters referring to the high-res initial node features, which are all zero
-    #model.downscaler.lin_r.weight.requires_grad = False
     
     if accelerator is not None:
         model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn = accelerator.prepare(
@@ -324,69 +298,6 @@ if __name__ == '__main__':
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
             f.write(f"\nCompleted in {end - start} seconds.")
-            f.write(f"\nDONE!")
-
-
-#-----------------------------------------------------
-#------------------------ TEST -----------------------
-#-----------------------------------------------------
-
-
-
-    test_start_idx, test_end_idx = date_to_idxs(year_start=2015, month_start=12, day_start=1,
-                                                    year_end=2016, month_end=12, day_end=31, first_year=2001)
-
-    with open(args.input_path+args.graph_file, 'rb') as f:
-        low_high_graph = pickle.load(f)
-        
-    predictions = torch.ones((low_high_graph['high'].num_nodes, test_end_idx-test_start_idx)) * torch.nan
-
-    low_high_graph.predictions = predictions
-    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx-24:test_end_idx,:]    
-
-    Dataset_Graph_test = getattr(dataset, "Dataset_Graph")
-
-    dataset_graph = Dataset_Graph_test(targets=None, graph=low_high_graph)
-    custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
-    sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=False)
-            
-    dataloader = torch.utils.data.DataLoader(dataset_graph, batch_size=1, num_workers=0,
-                    sampler=sampler_graph, collate_fn=custom_collate_fn)
-
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + args.log_file, 'a') as f:
-            f.write(f"\nStarting the test, from 01/11/2015 to 31/12/2015 (from idx {test_start_idx} to idx {test_end_idx}).")
-
-    model, dataloader = accelerator.prepare(model, dataloader)
-
-    tester = Tester()
-
-    start = time.time()
-
-    if args.model_type == "cl":
-        predictions, times = tester.test_cl(model, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
-    elif args.model_type == "reg":
-        predictions, times = tester.test_reg(model, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
-
-    end = time.time()
-
-    accelerator.wait_for_everyone()
-
-    times = accelerator.gather(times).squeeze()
-    times, indices = torch.sort(times)
-
-    predictions = accelerator.gather(predictions).squeeze().swapaxes(0,1)[:,indices]
-
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + args.log_file, 'a') as f:
-            f.write(f"\nDone. Testing concluded in {end-start} seconds.")
-            f.write("\nWrite the files.")
-
-    if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + "predictions.pkl", 'wb') as f:
-            pickle.dump(predictions.cpu(), f)
-    
-        
-        
+            f.write(f"\nDONE!")    
     
 

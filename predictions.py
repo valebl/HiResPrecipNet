@@ -87,7 +87,6 @@ if __name__ == '__main__':
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year_input)
     
-    #test_start_idx = max(test_start_idx,24)
     test_start_idx_input = max(test_start_idx_input,24)
 
     with open(args.input_path+"pr_gripho.pkl", 'rb') as f:
@@ -128,15 +127,11 @@ if __name__ == '__main__':
         with open(args.output_path + args.log_file, 'a') as f:
             f.write("\nLoading classifier state dict.")    
     model_cl.load_state_dict(checkpoint_cl)
-#    model_cl = load_checkpoint(model_cl, checkpoint_cl, args.output_path, args.log_file, accelerator, 
-#        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write("\nLoading regressor state dict.")
     model_reg.load_state_dict(checkpoint_reg)
-#    model_reg = load_checkpoint(model_reg, checkpoint_reg, args.output_path, args.log_file, accelerator,
-#        net_names=["low2high.", "low_net.", "high_net."], fine_tuning=False, device=device)
 
     if accelerator is not None:
         model_cl, model_reg, dataloader = accelerator.prepare(model_cl, model_reg, dataloader)
@@ -162,11 +157,7 @@ if __name__ == '__main__':
     times, indices = torch.sort(times)
 
     pr_cl = accelerator.gather(pr_cl).squeeze().swapaxes(0,-1)[:,indices]
-    # pr_cl = accelerator.gather(pr_cl).squeeze()
-    # pr_cl = pr_cl.swapaxes(0,1).swapaxes(1,2)[:,:,indices]
     pr_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,-1)[:,indices]
-    #pr_reg = accelerator.gather(pr_reg).squeeze()
-    #pr_reg = pr_reg.swapaxes(0,1).swapaxes(1,2)[:,:,indices]
 
     data = HeteroData()
     data.pr_gripho = pr_gripho

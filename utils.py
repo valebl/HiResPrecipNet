@@ -2,6 +2,7 @@ import time
 import sys
 import pickle
 import torch.nn as nn
+import numpy as np
 
 import torch
 
@@ -13,6 +14,143 @@ from datetime import datetime, date
 
 import torch
 import torch.nn.functional as F
+
+
+######################################################
+#------------------ GENERAL UTILITIES ---------------
+######################################################
+
+
+def write_log(s, args, mode='a'):
+    with open(args.output_path + args.log_file, mode) as f:
+        f.write(s)
+
+
+def use_gpu_if_possible():
+    return "cuda:0" if torch.cuda.is_available() else "cpu"
+
+
+######################################################
+#--------------- PREPROCESSING UTILITIES -------------
+######################################################
+
+
+def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr):
+    r'''
+    Derives a new version of the longitude, latitude and precipitation
+    tensors, by only retaining the values inside the specified lon-lat rectangle
+    Args:
+        lon_min, lon_max, lat_min, lat_max: integers
+        lon, lat, z, pr: tensors
+    Returns:
+        The new tensors with the selected values
+    '''
+
+    bool_lon = torch.logical_and(lon >= lon_min, lon <= lon_max)
+    bool_lat = torch.logical_and(lat >= lat_min, lat <= lat_max)
+    bool_both = torch.logical_and(bool_lon, bool_lat)
+    lon_sel = lon[bool_both]
+    lat_sel = lat[bool_both]
+    z_sel = z[bool_both]
+    pr_sel = pr[:,bool_both]
+    return lon_sel, lat_sel, z_sel, pr_sel
+
+
+def retain_valid_nodes(lon, lat, pr, z):
+
+    valid_nodes = ~torch.isnan(pr).all(dim=0)
+    lon = lon[valid_nodes]
+    lat = lat[valid_nodes]
+    pr = pr[:,valid_nodes]
+    z = z[valid_nodes]
+    return lon, lat, pr, z
+
+def select_nodes(lon_centre, lat_centre, lon, lat, pr, z, cell_idx, cell_idx_array, mask_1_cell_subgraphs,
+        lon_lat_z_graph, pr_graph, count_points, progressive_idx, offset=0.25, offset_9=0.25):
+    
+    r'''
+    Creates the single cell data structure, by only retaining the values
+    correspondent to the nodes that fall inside the considered cell, which
+    is identified by its centre lon and lat values and a specified offset
+    Args:
+        lon_centre, lat_centre = integers
+        lon, lat, pr = tensors
+        cell_idx:
+        cell_idx_array:
+        offset, offset_9: integers
+        mask_1_cell_subgraphs, mask_9_cells_subgraphs: lists
+    Returns:
+
+    '''
+    bool_lon = np.logical_and(lon >= lon_centre, lon <= lon_centre+offset)
+    bool_lat = np.logical_and(lat >= lat_centre, lat <= lat_centre+offset)
+    bool_both = np.logical_and(bool_lon, bool_lat)
+    progressive_idx_end = progressive_idx + bool_both.sum()
+    lon_lat_z_graph[0,progressive_idx:progressive_idx_end] = lon[bool_both]
+    lon_lat_z_graph[1,progressive_idx:progressive_idx_end] = lat[bool_both]
+    lon_lat_z_graph[2,progressive_idx:progressive_idx_end] = z[bool_both]
+    pr_graph[:,progressive_idx:progressive_idx_end] = pr[:,bool_both]
+    cell_idx_array[progressive_idx:progressive_idx_end] = cell_idx
+    bool_both = cell_idx_array == cell_idx
+    mask_1_cell_subgraphs[cell_idx, :] = bool_both
+    count_points.append([cell_idx, bool_both.sum()])
+    flag_valid_example = False
+    for i in torch.argwhere(bool_both):
+        if np.all(torch.isnan(pr_graph[:,i])):
+            cell_idx_array[i] *= -1
+        else:
+            flag_valid_example = True
+    return cell_idx_array, flag_valid_example, mask_1_cell_subgraphs, lon_lat_z_graph, pr_graph, count_points, progressive_idx_end
+
+
+def derive_edge_indexes_within(lon_radius, lat_radius, lon_n1 ,lat_n1, lon_n2, lat_n2):
+    r'''
+    Args:
+        lon_n1 (torch.tensor): longitudes of all first nodes in the edges
+        lat_n1 (torch.tensor): latitudes of all fisrt nodes in the edges
+        lon_n2 (torch.tensor): longitudes of all second nodes in the edges
+        lat_n2 (torch.tensor): latitudes of all second nodes in the edges
+        
+    '''
+
+    edge_indexes = []
+
+    lonlat_n1 = torch.concatenate((lon_n1.unsqueeze(-1), lat_n1.unsqueeze(-1)),dim=-1)
+    lonlat_n2 = torch.concatenate((lon_n2.unsqueeze(-1), lat_n2.unsqueeze(-1)),dim=-1)
+
+    for ii, xi in enumerate(lonlat_n1):
+        
+        bool_lon = abs(lon_n2 - xi[0]) < lon_radius
+        bool_lat = abs(lat_n2 - xi[1]) < lat_radius
+        bool_both = torch.logical_and(bool_lon, bool_lat).bool()
+        jj_list = torch.nonzero(bool_both)
+        xj_list = lonlat_n2[bool_both]
+        for jj, xj in zip(jj_list, xj_list):
+            if not torch.equal(xi, xj):
+                edge_indexes.append(torch.tensor([ii, jj]))
+
+    edge_indexes = torch.stack(edge_indexes)
+
+    return edge_indexes
+
+
+def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9):
+    
+    edge_index = []
+
+    lonlat_n1 = torch.concatenate((lon_n1.unsqueeze(-1), lat_n1.unsqueeze(-1)),dim=-1)
+    lonlat_n2 = torch.concatenate((lon_n2.unsqueeze(-1), lat_n2.unsqueeze(-1)),dim=-1)
+
+    dist = torch.cdist(lonlat_n2, lonlat_n1, p=2)
+    _ , knn = dist.topk(n_knn, largest=False, dim=-1)
+
+    for n_n2 in range(lonlat_n2.shape[0]):
+        for n_n1 in knn[n_n2,:]:
+            edge_index.append(torch.tensor([n_n1, n_n2]))
+
+    edge_index = torch.stack(edge_index)
+
+    return edge_index
 
 
 def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_end,
@@ -38,9 +176,15 @@ def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_en
     return start_idx, end_idx
 
 
+######################################################
+#------------------- TRAIN UTILITIES -----------------
+######################################################
+
+
 #-----------------------------------------------------
-#----------------- GENERAL UTILITIES -----------------
+#---------------------- METRICS ----------------------
 #-----------------------------------------------------
+
 
 class AverageMeter(object):
     '''
@@ -63,14 +207,12 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def use_gpu_if_possible():
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
-
 def accuracy_binary_one(prediction, target):
     prediction_class = torch.where(prediction > 0.0, 1.0, 0.0) 
     correct_items = (prediction_class == target)
     acc = correct_items.sum().item() / prediction.shape[0]  
     return acc
+
 
 def accuracy_binary_one_classes(prediction, target):
     prediction_class = torch.where(prediction > 0.0, 1.0, 0.0)
@@ -87,12 +229,14 @@ def accuracy_binary_one_classes(prediction, target):
         acc_class1 = torch.nan
     return acc_class0, acc_class1
 
+
 def accuracy_binary_two(prediction, target):
     prediction = torch.nn.functional.softmax(prediction, dim=-1)
     prediction_class = torch.argmax(prediction, dim=-1).squeeze()
     correct_items = (prediction_class == target)
     acc = correct_items.sum().item() / prediction.shape[0]  
     return acc
+
 
 def accuracy_binary_two_classes(prediction, target):
     prediction = torch.nn.functional.softmax(prediction, dim=-1)
@@ -109,6 +253,12 @@ def accuracy_binary_two_classes(prediction, target):
     else:
         acc_class1 = torch.nan
     return acc_class0, acc_class1
+
+
+#-----------------------------------------------------
+#--------------- CUSTOM LOSS FUNCTIONS ---------------
+#-----------------------------------------------------
+
 
 def weighted_mse_loss(input_batch, target_batch, weights):
     #return (weights * (input_batch - target_batch) ** 2).sum() / weights.sum()
@@ -130,6 +280,12 @@ class modified_mse_quantile_loss():
         loss_quantile = torch.mean(torch.max(self.q*(prediction_batch-target_batch), (1-self.q)*(prediction_batch-target_batch)))
         loss_mse = self.mse_loss(prediction_batch, target_batch) 
         return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
+
+
+#-----------------------------------------------------
+#-------------------- LOAD CHECKPOINT ----------------
+#-----------------------------------------------------
+
 
 def load_checkpoint(model, checkpoint, log_path, log_file, accelerator, net_names, fine_tuning=True, device=None, output=True):
     if accelerator is None or accelerator.is_main_process:
@@ -169,7 +325,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 
 
 #-----------------------------------------------------
-#------------------ TRAIN AND TEST -------------------
+#--------------- TRAIN AND VALIDATION ----------------
 #-----------------------------------------------------
 
 class Trainer(object):
@@ -202,30 +358,16 @@ class Trainer(object):
                 train_mask = graph["high"].train_mask
                 optimizer.zero_grad()
 
-                #-- one ->
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
                 accelerator.backward(loss)
-                #torch.nn.utils.clip_grad_norm_(model.parameters(),5)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 acc = accuracy_binary_one(y_pred, y)
                 acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)
-          
-                #-- two ->
-                # y_pred = model(graph)[train_mask]
-                # y = graph['high'].y[train_mask]
-                # loss = loss_fn(y_pred, y.to(torch.int64))
-                # accelerator.backward(loss)
-                # torch.nn.utils.clip_grad_norm_(model.parameters(),5)
-                # optimizer.step()
-                # loss_meter.update(val=loss.item(), n=1)    
-                # acc = accuracy_binary_two(y_pred, y)
-                # acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred, y)
 
-                #-- all ->
                 acc_meter.update(val=acc, n=1)
                 acc_class0_meter.update(val=acc_class0, n=1)
                 acc_class1_meter.update(val=acc_class1, n=1)
@@ -253,21 +395,12 @@ class Trainer(object):
                 
                 train_mask = graph["high"].train_mask
 
-                #-- one ->
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
                 acc = accuracy_binary_one(y_pred, y)
                 acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
 
-                #-- two ->
-                # y_pred = model(graph)[train_mask]
-                # y = graph['high'].y[train_mask]
-                # loss = loss_fn(y_pred, y.to(torch.int64))
-                # acc = accuracy_binary_two(y_pred, y)
-                # acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred, y)
-
-                #-- all ->
                 loss_meter_val.update(val=loss.item(), n=1)    
                 acc_meter_val.update(val=acc, n=1)
                 acc_class0_meter_val.update(val=acc_class0, n=1)
@@ -275,14 +408,6 @@ class Trainer(object):
             
             accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
                                 'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg})
-
-            #if accelerator.is_main_process:
-            #    checkpoint_dict = {
-            #        "parameters": model.module.state_dict(),
-            #        "optimizer": optimizer.state_dict(),
-            #        "epoch": epoch,
-            #        }
-            #    torch.save(checkpoint_dict, args.output_path+f"checkpoint_{epoch}.pth")
         return model
 
     def train_reg(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
@@ -300,16 +425,15 @@ class Trainer(object):
             start = time.time()
 
             for graph in dataloader_train:
-                #train_mask = graph['high'].train_mask
+                train_mask = graph['high'].train_mask
                 optimizer.zero_grad()
-                y_pred = model(graph).squeeze()#[train_mask]
-                y = graph['high'].y#[train_mask]
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
                 #loss = loss_fn(y_pred, y)
-                w = graph['high'].w#[train_mask]
+                w = graph['high'].w[train_mask]
                 loss = loss_fn(y_pred, y, w)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
-                #torch.nn.utils.clip_grad_norm_(model.parameters(),5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
@@ -330,17 +454,22 @@ class Trainer(object):
             # Perform validation step
             for graph in dataloader_val:
                 
-                #train_mask = graph["high"].train_mask
+                train_mask = graph["high"].train_mask
 
-                y_pred = model(graph).squeeze()#[train_mask]
-                y = graph['high'].y#[train_mask]
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
                 #loss = loss_fn(y_pred, y)
-                w = graph['high'].w#[train_mask]
+                w = graph['high'].w[train_mask]
                 loss = loss_fn(y_pred, y, w)
                 loss_meter_val.update(val=loss.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
         return model
+    
+
+#-----------------------------------------------------
+#----------------------- TEST ------------------------
+#-----------------------------------------------------
 
 
 class Tester(object):
@@ -349,8 +478,7 @@ class Tester(object):
         model_cl.eval()
         model_reg.eval()
         step = 0 
-        # device = args.device if accelerator is None else accelerator.device
-        # to_device = ToDevice(device)
+
         pr_cl = []
         pr_reg = []
         times = []
@@ -362,21 +490,12 @@ class Tester(object):
                 
                 # Regressor
                 y_pred_reg = model_reg(graph)
-                # low_high_graph.pr_reg[:,t] = torch.expm1(y_pred_reg).cpu()
                 pr_reg.append(torch.expm1(y_pred_reg))
-#                pr_reg.append(y_pred_reg)
 
                 # Classifier
                 y_pred_cl = model_cl(graph)
-                #-- (weighted) cross entropy loss ->
-                #low_high_graph.pr_cl[:,t] = torch.argmax(torch.nn.functional.softmax(y_pred_cl, dim=-1), dim =-1).unsqueeze(-1).float().cpu()
-                #-- <-
                 #-- sigmoid focal loss ->
-                # low_high_graph.pr_cl[:,t] = torch.where(y_pred_cl >= 0.0, 1.0, 0.0).cpu()
                 pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
-#                pr_cl.append(torch.nn.functional.sigmoid(y_pred_cl))
-                #  pr_cl.append(y_pred_cl)
-                #-- <-
                 
                 if step % 100 == 0:
                     if accelerator is None or accelerator.is_main_process:
@@ -384,10 +503,6 @@ class Tester(object):
                             f.write(f"\nStep {step} done.")
                 step += 1 
 
-        #Comined classifier and regressor
-        #low_high_graph["pr"] = low_high_graph.pr_cl * low_high_graph.pr_reg 
-        #low_high_graph["pr"] = torch.where(y_pred_cl > 0.0, 1.0, 0.0).cpu() * low_high_graph.pr_reg 
-                
         pr_cl = torch.stack(pr_cl)
         pr_reg = torch.stack(pr_reg)
         times = torch.stack(times)
@@ -407,13 +522,8 @@ class Tester(object):
 
                 # Classifier
                 y_pred_cl = model_cl(graph)
-                #-- (weighted) cross entropy loss ->
-                #low_high_graph.pr_cl[:,t] = torch.argmax(torch.nn.functional.softmax(y_pred_cl, dim=-1), dim =-1).unsqueeze(-1).float().cpu()
-                #-- <-
                 #-- sigmoid focal loss ->
                 pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
-                # pr_cl.append(pr_cl)
-                #-- <-
                 
                 if step % 100 == 0:
                     if accelerator is None or accelerator.is_main_process:
@@ -452,6 +562,14 @@ class Tester(object):
 
         return pr_reg, times
     
+
+#-----------------------------------------------------
+#-------------------- VALIDATION ---------------------
+#-----------------------------------------------------
+    
+
+class Validator(object):
+
     def validate_cl(self, model, dataloader, loss_fn):
 
         model.eval()
@@ -497,7 +615,6 @@ class Tester(object):
                 y = graph['high'].y[train_mask]
                 w = graph['high'].w[train_mask]
                 loss = loss_fn(y_pred, y, w)
-                #loss = loss_fn(y_pred, y)
 
                 loss_meter.update(val=loss.item(), n=1)   
 
