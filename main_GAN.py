@@ -314,7 +314,7 @@ if __name__ == '__main__':
 
     trainer = Trainer()
     model_G, model_D = trainer.train_gan(model_G, model_D, dataloader_train_real, dataloader_train_fake, dataloader_val_real, dataloader_val_fake, optimizer_G, optimizer_D,
-              loss_fn_G_rec, loss_fn_G_adv, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args)
+              loss_fn_G_adv, loss_fn_G_rec, loss_fn_D, lr_scheduler_G, lr_scheduler_D, accelerator, args)
         
     end = time.time()
 

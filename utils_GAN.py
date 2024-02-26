@@ -349,7 +349,7 @@ class Trainer(object):
                 loss_D_real = loss_fn_D(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
                 loss_D_real.backward()
                 ## 1b Fake examples
-                y_graph_fake = graph_fake['high'].y.clone()      # save ground truth to use in reconstruction loss
+                graph_fake_ground_truth = graph_fake['high'].y.clone()      # save ground truth to use in reconstruction loss
                 graph_fake['high'].y = model_G(graph_fake)      # derive fake graph from Generator
                 output = model_D(graph_fake).squeeze()
                 loss_D_fake = loss_fn_D(output, (torch.ones(output.shape)*fake_label).to(accelerator.device))
@@ -364,7 +364,7 @@ class Trainer(object):
                 optimizer_G.zero_grad()
                 output = model_D(graph_fake).squeeze()
                 loss_G_adv = loss_fn_G_adv(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
-                loss_G_rec = loss_fn_G_rec(output, y_graph_fake)
+                loss_G_rec = loss_fn_G_rec(graph_fake['high'].y, graph_fake_ground_truth)
                 loss_G = loss_G_adv + alpha * loss_G_rec
                 loss_G.backward()
                 optimizer_G.step()
@@ -418,7 +418,7 @@ class Trainer(object):
                 loss_D = loss_D_real + loss_D_fake
                 ##--- Part 2 - Generator ---##
                 loss_G_adv = loss_fn_G_adv(output, (torch.ones(output.shape)*real_label).to(accelerator.device))
-                loss_G_rec = loss_fn_G_rec(output, y_graph_fake)
+                loss_G_rec = loss_fn_G_rec(graph_fake['high'].y, graph_fake_ground_truth)
                 loss_G = loss_G_adv + alpha * loss_G_rec
 
                 loss_meter_val_D.update(val=loss_D.item(), n=1)    
