@@ -19,6 +19,7 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 #-- paths
 parser.add_argument('--output_path', type=str)
 parser.add_argument('--log_file', type=str)
+parser.add_argument('--output_path_low', type=str)
 parser.add_argument('--input_path_gripho', type=str)
 parser.add_argument('--input_path_topo', type=str)
 parser.add_argument('--gripho_file', type=str)
@@ -83,9 +84,9 @@ if __name__ == '__main__':
     write_log('\nStarting the preprocessing of the low resolution data.', args, 'w')
 
     for p_idx, p in enumerate(params):
-        if args.predictors_type == "ERA5":
+        if args.predictors_type == "era5":
             write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc ...', args)
-            with nc.Dataset(f'{args.input_path_low}{args.input_files_prefix_low}{p}.nc') as ds:
+            with nc.Dataset(f'{args.input_path_phase_2a}{args.input_files_prefix_low}{p}.nc') as ds:
                 data = ds[p][:]
                 if p_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
                     lat_low = ds['latitude'][:]
@@ -96,10 +97,10 @@ if __name__ == '__main__':
                     input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # time, variables, levels, lat, lon
             input_ds[:, p_idx,:,:,:] = data
 
-        elif args.predictors_type == "RegCM":
+        elif args.predictors_type == "regcm":
             for l_idx, level in enumerate(['200', '500', '700', '850', '1000']):
                 write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc for level {level}...', args)
-                with nc.Dataset(f'{args.input_path_low}{args.input_files_prefix_low}{p}.nc') as ds:
+                with nc.Dataset(f'{args.input_path_phase_2a}{args.input_files_prefix_low}{p}.nc') as ds:
                     var_name = f"{p}{level}"
                     data = ds[var_name][:]
                     if p_idx == 0 and l_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
@@ -122,6 +123,16 @@ if __name__ == '__main__':
         
     #-- Flip the dataset --#
     input_ds = np.flip(input_ds, 3) # the origin in the input files is in the top left corner, while we use the bottom left corner    
+
+    #####################################################################################
+    input_ds = torch.tensor(input_ds.copy())
+    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
+
+    with open(args.output_path + "input_data_ERA5.pkl", 'wb') as f:
+        pickle.dump(input_ds, f)
+
+    sys.exit()
+    #####################################################################################
 
     #-- Standardize the dataset--#
     with open(args.output_path + args.log_file, 'a') as f:
@@ -170,12 +181,12 @@ if __name__ == '__main__':
         with open(args.output_path + "stds.pkl", 'wb') as f:
             pickle.dump(stds, f)
         
-    input_ds = torch.tensor(input_ds)
+    input_ds_standard = torch.tensor(input_ds_standard)
 
-    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
-    input_ds = torch.flatten(input_ds, end_dim=1)   # num_nodes, time, vars, levels
+    input_ds_standard = torch.permute(input_ds_standard, (3,4,0,1,2)) # lat, lon, time, vars, levels
+    input_ds_standard = torch.flatten(input_ds_standard, end_dim=1)   # num_nodes, time, vars, levels
 
-    input_ds = torch.flatten(input_ds, start_dim=2, end_dim=-1)
+    input_ds_standard = torch.flatten(input_ds_standard, start_dim=2, end_dim=-1)
 
     with open(args.output_path + args.log_file, 'a') as f:
         f.write(f'\nPreprocessing of low resolution data finished.')
