@@ -125,13 +125,13 @@ if __name__ == '__main__':
     input_ds = np.flip(input_ds, 3) # the origin in the input files is in the top left corner, while we use the bottom left corner    
 
     #####################################################################################
-    input_ds = torch.tensor(input_ds.copy())
-    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
-
-    with open(args.output_path + "input_data_ERA5.pkl", 'wb') as f:
-        pickle.dump(input_ds, f)
-
-    sys.exit()
+#    input_ds = torch.tensor(input_ds.copy())
+#    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
+#
+#    with open(args.output_path + "input_data_ERA5.pkl", 'wb') as f:
+#        pickle.dump(input_ds, f)
+#
+#    sys.exit()
     #####################################################################################
 
     #-- Standardize the dataset--#
