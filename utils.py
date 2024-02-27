@@ -277,7 +277,7 @@ class modified_mse_quantile_loss():
         self.alpha = alpha
     
     def __call__(self, prediction_batch, target_batch):
-        loss_quantile = torch.mean(torch.max(self.q*(prediction_batch-target_batch), (1-self.q)*(prediction_batch-target_batch)))
+        loss_quantile = torch.mean(torch.max(self.q*(target_batch-prediction_batch), (1-self.q)*(prediction_batch-target_batch)))
         loss_mse = self.mse_loss(prediction_batch, target_batch) 
         return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
 
@@ -429,9 +429,9 @@ class Trainer(object):
                 optimizer.zero_grad()
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                #loss = loss_fn(y_pred, y)
-                w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
+                loss = loss_fn(y_pred, y)
+                #w = graph['high'].w[train_mask]
+                #loss = loss_fn(y_pred, y, w)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
@@ -458,9 +458,9 @@ class Trainer(object):
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                #loss = loss_fn(y_pred, y)
-                w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
+                loss = loss_fn(y_pred, y)
+                #w = graph['high'].w[train_mask]
+                #loss = loss_fn(y_pred, y, w)
                 loss_meter_val.update(val=loss.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
