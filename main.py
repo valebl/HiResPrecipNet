@@ -127,6 +127,8 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn) 
     elif args.loss_fn == 'modified_mse_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'threshold_quantile_loss':
+        loss_fn = getattr(utils, args.loss_fn)
     else:
         loss_fn = getattr(nn.functional, args.loss_fn) 
     

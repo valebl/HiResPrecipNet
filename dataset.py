@@ -103,7 +103,7 @@ class Dataset_Graph(Dataset):
         snapshot['low'].num_nodes = self.graph['low'].num_nodes
         snapshot.t = time_index
         
-        snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
+        #snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
 
@@ -118,7 +118,7 @@ class Dataset_Graph(Dataset):
         snapshot['low'].lat = self.graph['low'].lat
 
         #snapshot['high'].laplacian_eigenvector_pe = self.graph['high'].laplacian_eigenvector_pe     
-        snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
+        #snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
 
         return snapshot
 

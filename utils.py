@@ -281,6 +281,11 @@ class modified_mse_quantile_loss():
         loss_mse = self.mse_loss(prediction_batch, target_batch) 
         return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
 
+def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.95, threshold=1):
+    mask_low_pr = ground_truth <= threshold
+    loss_low_pr = mask_low_pr * torch.max(q_low*(ground_truth-predictions), (1-q_low)*(predictions-ground_truth))
+    loss_high_pr = ~mask_low_pr * torch.max(q_high*(ground_truth-predictions), (1-q_high)*(predictions-ground_truth))
+    return torch.mean(loss_low_pr + loss_high_pr)
 
 #-----------------------------------------------------
 #-------------------- LOAD CHECKPOINT ----------------
@@ -411,6 +416,8 @@ class Trainer(object):
         return model
 
     def train_reg(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
+        
+        mse_loss = nn.MSELoss()
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the regressor.")
@@ -420,7 +427,9 @@ class Trainer(object):
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
             loss_meter = AverageMeter()
+            rmse_loss_meter = AverageMeter()
             loss_meter_val = AverageMeter()
+            rmse_loss_meter_val = AverageMeter()
             
             start = time.time()
 
@@ -437,9 +446,13 @@ class Trainer(object):
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
+                loss_rmse = torch.sqrt(mse_loss(y_pred, y))
+                rmse_loss_meter.update(val=loss_rmse.item(), n=1)    
+                accelerator.log({'epoch':epoch, 'RMSE loss iteration': rmse_loss_meter.val, 'RMSE loss avg': rmse_loss_meter.avg})
 
             end = time.time()
             accelerator.log({'loss epoch': loss_meter.avg})
+            accelerator.log({'RMSE loss epoch': rmse_loss_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
@@ -462,8 +475,11 @@ class Trainer(object):
                 #w = graph['high'].w[train_mask]
                 #loss = loss_fn(y_pred, y, w)
                 loss_meter_val.update(val=loss.item(), n=1)    
+                loss_rmse = torch.sqrt(mse_loss(y_pred, y))
+                rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
+            accelerator.log({'validation RMSE loss': rmse_loss_meter_val.avg})
         return model
     
 
@@ -490,7 +506,8 @@ class Tester(object):
                 
                 # Regressor
                 y_pred_reg = model_reg(graph)
-                pr_reg.append(torch.expm1(y_pred_reg))
+                #pr_reg.append(torch.expm1(y_pred_reg))
+                pr_reg.append(y_pred_reg)
 
                 # Classifier
                 y_pred_cl = model_cl(graph)

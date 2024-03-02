@@ -36,12 +36,6 @@ parser.add_argument('--model_reg', type=str, default=None)
 parser.add_argument('--model_combined', type=str, default=None)
 parser.add_argument('--dataset_name', type=str, default=None) 
 
-parser.add_argument('--lon_min', type=float)
-parser.add_argument('--lon_max', type=float)
-parser.add_argument('--lat_min', type=float)
-parser.add_argument('--lat_max', type=float)
-parser.add_argument('--interval', type=float, default=0.25)
-
 #-- start and end training dates
 parser.add_argument('--test_year_start', type=int)
 parser.add_argument('--test_month_start', type=int)
