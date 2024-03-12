@@ -133,14 +133,14 @@ if __name__ == '__main__':
 #
 #    sys.exit()
     #####################################################################################
-
-    input_ds = torch.tensor(input_ds.copy())
-    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
-    input_ds = torch.flatten(input_ds, end_dim=1)   # num_nodes, time, vars, levels
-    with open(args.output_path + "hierarchical_input.pkl", 'wb') as f:
-        pickle.dump(input_ds, f)
-
-    sys.exit()
+#
+#    input_ds = torch.tensor(input_ds.copy())
+#    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
+#    input_ds = torch.flatten(input_ds, end_dim=1)   # num_nodes, time, vars, levels
+#    with open(args.output_path + "hierarchical_input.pkl", 'wb') as f:
+#        pickle.dump(input_ds, f)
+#
+#    sys.exit()
 
     #-- Standardize the dataset--#
     with open(args.output_path + args.log_file, 'a') as f:
@@ -355,45 +355,31 @@ if __name__ == '__main__':
     low_high_graph['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
     low_high_graph['low', 'within', 'low'].edge_index = edges_high.swapaxes(0,1)
 
-    #-- LAPLACIAN EIGENVECTORS --#
-
-    high_graph.edge_index = edges_high.swapaxes(0,1)
-    high_graph.x = torch.zeros((num_nodes_high, 0))
-    high_graph = transform(high_graph)
-    low_high_graph['high'].laplacian_eigenvector_pe = high_graph.laplacian_eigenvector_pe
-
+#    #-- LAPLACIAN EIGENVECTORS --#
+#
+#    high_graph.edge_index = edges_high.swapaxes(0,1)
+#    high_graph.x = torch.zeros((num_nodes_high, 0))
+#    high_graph = transform(high_graph)
+#    low_high_graph['high'].laplacian_eigenvector_pe = high_graph.laplacian_eigenvector_pe
+#
     #-- HIERARCHICAL GRAPH --#
-    low_high_graph_hierarchical = HeteroData()
-
-    low_high_graph_hierarchical['low'].x = input_ds_standard_var_lev # num_nodes, time, vars, levels
-    # low_high_graph_hierarchical['low_200'].x = input_ds_standard_var_lev[:,:,:,0].squeeze() # num_nodes, time, vars, levels
-    # low_high_graph_hierarchical['low_500'].x = input_ds_standard_var_lev[:,:,:,1].squeeze() 
-    # low_high_graph_hierarchical['low_700'].x = input_ds_standard_var_lev[:,:,:,2].squeeze()
-    # low_high_graph_hierarchical['low_850'].x = input_ds_standard_var_lev[:,:,:,3].squeeze()
-    # low_high_graph_hierarchical['low_1000'].x = input_ds_standard_var_lev[:,:,:,4].squeeze()
-
-    low_high_graph_hierarchical['high'].x = torch.zeros((num_nodes_high, 0))
-    low_high_graph_hierarchical['high'].z_std = z_high_std.unsqueeze(-1)
-
-    #-- horizontal edges
-    low_high_graph_hierarchical['low', 'horizontal', 'low'].edge_index = edges_low_horizontal.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_500', 'horizontal', 'low_500'].edge_index = edges_low_horizontal.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_700', 'horizontal', 'low_700'].edge_index = edges_low_horizontal.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_850', 'horizontal', 'low_850'].edge_index = edges_low_horizontal.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_1000', 'horizontal', 'low_1000'].edge_index = edges_low_horizontal.swapaxes(0,1)
-
-    #-- vertical edges
-    low_high_graph_hierarchical['low', 'vertical', 'low'].edge_index = edges_low_vertical.swapaxes(0,1)
-    low_high_graph_hierarchical['low', 'to', 'low'].edge_index = edges_low_vertical_directed.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_500', 'vertical', 'low_700'].edge_index = edges_low_vertical.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_700', 'vertical', 'low_850'].edge_index = edges_low_vertical.swapaxes(0,1)
-    # low_high_graph_hierarchical['low_850', 'vertical', 'low_1000'].edge_index = edges_low_vertical.swapaxes(0,1)
-
-    low_high_graph_hierarchical['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
-    low_high_graph_hierarchical['high', 'within', 'high'].edge_index = edges_high.swapaxes(0,1)
-
-    with open(args.output_path + 'low_high_graph_hierarchical' + args.suffix_phase_2 + '.pkl', 'wb') as f:
-        pickle.dump(low_high_graph_hierarchical, f)
+#    low_high_graph_hierarchical = HeteroData()
+#
+#    low_high_graph_hierarchical['low'].x = input_ds_standard_var_lev # num_nodes, time, vars, levels
+#    low_high_graph_hierarchical['high'].x = torch.zeros((num_nodes_high, 0))
+#    low_high_graph_hierarchical['high'].z_std = z_high_std.unsqueeze(-1)
+#
+#    #-- horizontal edges
+#    low_high_graph_hierarchical['low', 'horizontal', 'low'].edge_index = edges_low_horizontal.swapaxes(0,1)
+#
+#    #-- vertical edges
+#    low_high_graph_hierarchical['low', 'vertical', 'low'].edge_index = edges_low_vertical.swapaxes(0,1)
+#    low_high_graph_hierarchical['low', 'to', 'low'].edge_index = edges_low_vertical_directed.swapaxes(0,1)
+#    low_high_graph_hierarchical['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
+#    low_high_graph_hierarchical['high', 'within', 'high'].edge_index = edges_high.swapaxes(0,1)
+#
+#    with open(args.output_path + 'low_high_graph_hierarchical' + args.suffix_phase_2 + '.pkl', 'wb') as f:
+#        pickle.dump(low_high_graph_hierarchical, f)
 
 
     #-- WRITE THE GRAPH --#
