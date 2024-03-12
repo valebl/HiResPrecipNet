@@ -148,6 +148,127 @@ class Dataset_Graph(Dataset):
         return s
     
 
+class Dataset_Hierarchical_Graph(Dataset):
+
+    def __init__(
+        self,
+        graph: Graph,
+        targets: Targets,
+        **kwargs: Additional_Features
+    ):
+        self.graph = graph
+        self.targets = targets
+        self.additional_feature_keys = []
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            self.additional_feature_keys.append(key)
+        #self._check_temporal_consistency()
+        #self._add_node_degree()
+
+
+    def __len__(self):
+        #return len(self.features)
+        return self.graph['low'].x.shape[1] - 24
+        
+    def _check_temporal_consistency(self):
+        if self.targets is not None:
+            assert (self.graph['low'].x.shape[1] - 24) == self.targets.shape[1], "Temporal dimension inconsistency."
+
+    def _set_snapshot_count(self):
+        self.snapshot_count = len(self)
+    
+    def _get_high_nodes_degree(self, snapshot):
+        node_degree = (degree(snapshot['high','within','high'].edge_index[0], snapshot['high'].num_nodes) / 8).unsqueeze(-1)
+        return node_degree
+
+    def _get_features(self, time_index: int, level):
+        time_index_x = time_index + 24
+        #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
+        x_low = self.graph['low'].x[:,time_index_x-24:time_index_x+1:6,:,level].squeeze()  # num_nodes, time, vars, levels
+        x_low = x_low.flatten(start_dim=1, end_dim=-1)
+        return x_low
+    
+    def _get_target(self, time_index: int):
+        return self.targets[:,time_index]
+
+    def _get_train_mask(self, target: torch.tensor):
+        return ~torch.isnan(target)
+    
+    def _get_additional_feature(self, time_index: int, feature_key: str):
+        feature = getattr(self, feature_key)[:,time_index]
+        return feature
+    
+    def _get_additional_features(self, time_index: int):
+        additional_features = {
+            key: self._get_additional_feature(time_index, key)
+            for key in self.additional_feature_keys
+        }
+        return additional_features
+    
+    def __getitem__(self, time_index: int):
+
+        y = self._get_target(time_index) if self.targets is not None else None
+        train_mask = self._get_train_mask(y) if y is not None else None
+
+        additional_features = self._get_additional_features(time_index)
+
+        snapshot = HeteroData()
+       
+        snapshot['low_200'].num_nodes = self.graph['low'].num_nodes
+        snapshot['low_500'].num_nodes = self.graph['low'].num_nodes
+        snapshot['low_700'].num_nodes = self.graph['low'].num_nodes
+        snapshot['low_850'].num_nodes = self.graph['low'].num_nodes
+        snapshot['low_1000'].num_nodes = self.graph['low'].num_nodes
+
+        # Horizontal bidirectional edges        
+        snapshot['low_200', 'horizontal', 'low_200'].edge_index = self.graph['low', 'horizontal', 'low'].edge_index.clone()
+        snapshot['low_500', 'horizontal', 'low_500'].edge_index = self.graph['low', 'horizontal', 'low'].edge_index.clone()
+        snapshot['low_700', 'horizontal', 'low_700'].edge_index =self.graph['low', 'horizontal', 'low'].edge_index.clone()
+        snapshot['low_850', 'horizontal', 'low_850'].edge_index = self.graph['low', 'horizontal', 'low'].edge_index.clone()
+        snapshot['low_1000', 'horizontal', 'low_1000'].edge_index = self.graph['low', 'horizontal', 'low'].edge_index.clone()
+
+        # # Vertical bidirectional edges
+        # snapshot['low_200', 'vertical', 'low_500'].edge_index = self.graph['low', 'vertical', 'low'].edge_index.clone()
+        # snapshot['low_500', 'vertical', 'low_700'].edge_index =  self.graph['low', 'vertical', 'low'].edge_index.clone()
+        # snapshot['low_700', 'vertical', 'low_850'].edge_index =  self.graph['low', 'vertical', 'low'].edge_index.clone()
+        # snapshot['low_850', 'vertical', 'low_1000'].edge_index =  self.graph['low', 'vertical', 'low'].edge_index.clone()
+
+        # Vertical unidirectional edges (top-to-down)
+        snapshot['low_200', 'to', 'low_500'].edge_index = self.graph['low', 'to', 'low'].edge_index.clone()
+        snapshot['low_500', 'to', 'low_700'].edge_index =  self.graph['low', 'to', 'low'].edge_index.clone()
+        snapshot['low_700', 'to', 'low_850'].edge_index =  self.graph['low', 'to', 'low'].edge_index.clone()
+        snapshot['low_850', 'to', 'low_1000'].edge_index =  self.graph['low', 'to', 'low'].edge_index.clone()
+
+        snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
+        snapshot['low_1000', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+
+        snapshot['low_200'].x = self._get_features(time_index, level=0)
+        snapshot['low_500'].x = self._get_features(time_index, level=1)
+        snapshot['low_700'].x = self._get_features(time_index, level=2)
+        snapshot['low_850'].x = self._get_features(time_index, level=3)
+        snapshot['low_1000'].x = self._get_features(time_index, level=4)
+
+        for key, value in additional_features.items():
+            if value.shape[0] == self.graph['high'].x.shape[0]:
+                snapshot['high'][key] = value
+                # elif value.shape[0] == self.graph['low'].x.shape[0]:
+                #     snapshot['high'][key] = value
+
+        snapshot.t = time_index
+        snapshot['high'].y = y
+        snapshot['high'].train_mask = train_mask
+        snapshot['high'].num_nodes = self.graph['high'].num_nodes
+        snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
+        snapshot['high'].z_std = self.graph['high'].z_std
+
+        snapshot.num_nodes = snapshot['high'].num_nodes + snapshot['low'].num_noodes * 5
+
+        #snapshot['high'].laplacian_eigenvector_pe = self.graph['high'].laplacian_eigenvector_pe     
+        #snapshot['high'].deg = self._get_high_nodes_degree(snapshot)
+
+        return snapshot
+    
+
 class Dataset_Graph_t(Dataset_Graph):
 
     def _get_features(self, time_index: int):

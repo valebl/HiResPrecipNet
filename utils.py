@@ -134,7 +134,7 @@ def derive_edge_indexes_within(lon_radius, lat_radius, lon_n1 ,lat_n1, lon_n2, l
     return edge_indexes
 
 
-def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9):
+def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9, undirected=False):
     
     edge_index = []
 
@@ -147,6 +147,8 @@ def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9):
     for n_n2 in range(lonlat_n2.shape[0]):
         for n_n1 in knn[n_n2,:]:
             edge_index.append(torch.tensor([n_n1, n_n2]))
+            if undirected:
+                edge_index.append(torch.tensor([n_n2, n_n1]))
 
     edge_index = torch.stack(edge_index)
 
@@ -281,11 +283,12 @@ class modified_mse_quantile_loss():
         loss_mse = self.mse_loss(prediction_batch, target_batch) 
         return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
 
-def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.95, threshold=1):
-    mask_low_pr = ground_truth <= threshold
-    loss_low_pr = mask_low_pr * torch.max(q_low*(ground_truth-predictions), (1-q_low)*(predictions-ground_truth))
-    loss_high_pr = ~mask_low_pr * torch.max(q_high*(ground_truth-predictions), (1-q_high)*(predictions-ground_truth))
-    return torch.mean(loss_low_pr + loss_high_pr)
+def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, threshold=np.log1p(1)):
+    mask_low = ground_truth <= threshold
+    loss_low = mask_low * torch.max(q_low*(ground_truth-predictions), (1-q_low)*(predictions-ground_truth))
+    loss_high = ~mask_low * torch.max(q_high*(ground_truth-predictions), (1-q_high)*(predictions-ground_truth))
+    #loss_mse = nn.functional.mse_loss(predictions, ground_truth) 
+    return torch.mean(loss_low + loss_high)
 
 #-----------------------------------------------------
 #-------------------- LOAD CHECKPOINT ----------------
@@ -438,15 +441,15 @@ class Trainer(object):
                 optimizer.zero_grad()
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y)
-                #w = graph['high'].w[train_mask]
-                #loss = loss_fn(y_pred, y, w)
+                #loss = loss_fn(y_pred, y)
+                w = graph['high'].w[train_mask]
+                loss = loss_fn(y_pred, y, w)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
-                loss_rmse = torch.sqrt(mse_loss(y_pred, y))
+                loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
                 rmse_loss_meter.update(val=loss_rmse.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'RMSE loss iteration': rmse_loss_meter.val, 'RMSE loss avg': rmse_loss_meter.avg})
 
@@ -471,11 +474,11 @@ class Trainer(object):
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y)
-                #w = graph['high'].w[train_mask]
-                #loss = loss_fn(y_pred, y, w)
+                #loss = loss_fn(y_pred, y)
+                w = graph['high'].w[train_mask]
+                loss = loss_fn(y_pred, y, w)
                 loss_meter_val.update(val=loss.item(), n=1)    
-                loss_rmse = torch.sqrt(mse_loss(y_pred, y))
+                loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
                 rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
@@ -506,8 +509,8 @@ class Tester(object):
                 
                 # Regressor
                 y_pred_reg = model_reg(graph)
-                #pr_reg.append(torch.expm1(y_pred_reg))
-                pr_reg.append(y_pred_reg)
+                pr_reg.append(torch.expm1(y_pred_reg)) 
+                #pr_reg.append(y_pred_reg)
 
                 # Classifier
                 y_pred_cl = model_cl(graph)
