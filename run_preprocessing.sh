@@ -25,7 +25,7 @@ module load cdo
 
 source ${SOURCE_PATH}
 
-cd ${INPUT_PATH_PHASE_1A}
+cd ${INPUT_PATH_PHASE_1}
 
 if [ ${PERFORM_PHASE_1} = true ] ; then
 	source ${PHASE_1_PATH} ${LON_MIN} ${LON_MAX} ${LAT_MIN} ${LAT_MAX} ${INTERVAL} ${INPUT_PATH_PHASE_1} ${OUTPUT_PATH_PHASE_1} ${PREFIX_PHASE_1}
