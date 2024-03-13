@@ -5,8 +5,8 @@ LON_MAX=$2
 LAT_MIN=$3
 LAT_MAX=$4
 INTERVAL=$5
-INPUT_PATH_PHASE_1A=$6
-OUTPUT_PATH=$7
+INPUT_PATH_PHASE_1=$6
+OUTPUT_PATH_PHASE_1=$7
 PREFIX=$8
 
 lon_min_era5=$(echo $LON_MIN-3\*$INTERVAL | bc)
@@ -19,17 +19,19 @@ echo $lon_max_era5
 echo $lat_min_era5
 echo $lat_max_era5
 
+cd ${INPUT_PATH_PHASE_1}
+
 ## slice each file to the desired lon and lat window
 for v in 'q' 't' 'u' 'v' 'z' ; do
-	files=$(ls $*_{v}.nc)
+	files=$(ls "${v}_"*".nc")
 	for file in $files ; do
-		cdo sellonlatbox,$lon_min_era5,$lon_max_era5,$lat_min_era5,$lat_max_era5 "${INPUT_PATH_PHASE_1A}${file}" "${OUTPUT_PATH}${PREFIX}${file}"
+		cdo sellonlatbox,$lon_min_era5,$lon_max_era5,$lat_min_era5,$lat_max_era5 "${INPUT_PATH_PHASE_1}${file}" "${OUTPUT_PATH_PHASE_1}${PREFIX}${file}"
 	done
 done
 
 echo "Done"
 
-cd ${OUTPUT_PATH}
+cd ${OUTPUT_PATH_PHASE_1}
 
 # merge all the sliced files into a single file for all the time span considered
 for v in 'q' 't' 'u' 'v' 'z' ; do
