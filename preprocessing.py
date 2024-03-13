@@ -17,9 +17,9 @@ from utils import write_log, cut_window, retain_valid_nodes, derive_edge_indexes
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
 #-- paths
+parser.add_argument('--input_path_phase_2', type=str, help='path to input directory')
 parser.add_argument('--output_path', type=str)
 parser.add_argument('--log_file', type=str)
-parser.add_argument('--output_path_low', type=str)
 parser.add_argument('--input_path_gripho', type=str)
 parser.add_argument('--input_path_topo', type=str)
 parser.add_argument('--gripho_file', type=str)
@@ -46,7 +46,6 @@ parser.add_argument('--mean_std_over_variable_and_level_low', dest='mean_std_ove
 parser.add_argument('--predictors_type', type=str)
 
 #-- era5
-parser.add_argument('--input_path_phase_2a', type=str, help='path to input directory')
 parser.add_argument('--input_files_prefix_low', type=str, help='prefix for the input files (convenction: {prefix}{parameter}.nc)', default='sliced_')
 parser.add_argument('--n_levels_low', type=int, help='number of pressure levels considered', default=5)
     
@@ -86,7 +85,7 @@ if __name__ == '__main__':
     for p_idx, p in enumerate(params):
         if args.predictors_type == "era5":
             write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc ...', args)
-            with nc.Dataset(f'{args.input_path_phase_2a}{args.input_files_prefix_low}{p}.nc') as ds:
+            with nc.Dataset(f'{args.input_path_phase_2}{args.input_files_prefix_low}{p}.nc') as ds:
                 data = ds[p][:]
                 if p_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
                     lat_low = ds['latitude'][:]
@@ -100,7 +99,7 @@ if __name__ == '__main__':
         elif args.predictors_type == "regcm":
             for l_idx, level in enumerate(['200', '500', '700', '850', '1000']):
                 write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc for level {level}...', args)
-                with nc.Dataset(f'{args.input_path_phase_2a}{args.input_files_prefix_low}{p}.nc') as ds:
+                with nc.Dataset(f'{args.input_path_phase_2}{args.input_files_prefix_low}{p}.nc') as ds:
                     var_name = f"{p}{level}"
                     data = ds[var_name][:]
                     if p_idx == 0 and l_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
@@ -384,8 +383,8 @@ if __name__ == '__main__':
 
     #-- WRITE THE GRAPH --#
 
-    # with open(args.output_path + 'low_high_graph' + args.suffix_phase_2 + '.pkl', 'wb') as f:
-    #     pickle.dump(low_high_graph, f)
+    with open(args.output_path + 'low_high_graph' + args.suffix_phase_2 + '.pkl', 'wb') as f:
+        pickle.dump(low_high_graph, f)
 
     write_log(f"\nIn total, preprocessing took {time.time() - time_start} seconds", args)            
 
