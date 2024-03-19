@@ -15,7 +15,6 @@ from datetime import datetime, date
 import torch
 import torch.nn.functional as F
 
-
 ######################################################
 #------------------ GENERAL UTILITIES ---------------
 ######################################################
@@ -283,6 +282,70 @@ class modified_mse_quantile_loss():
         loss_mse = self.mse_loss(prediction_batch, target_batch) 
         return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
 
+
+class quantized_loss_crossentropy():
+    '''
+    w:      weight, computed as 1-h, where h is normalized histogram of
+            a given input data x considering B bins the normalization is
+            obtained by dividing the bins by the maximum bin count observed for x
+    bins:   array cntaining the bin number for each of the nodes
+    '''
+    def __init__(self):
+        self.cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
+    
+    def __call__(self, prediction_batch, target_batch, bins):
+        loss_quantized = 0
+        bins = bins.int()
+        for b in torch.unique(bins):
+            mask_b = bins == b
+            omega = mask_b.sum()
+            loss_quantized += 1/omega * self.cross_entropy_loss(prediction_batch * mask_b, target_batch * mask_b)
+        return torch.mean(loss_quantized)
+    
+
+class quantized_loss():
+    '''
+    w:      weight, computed as 1-h, where h is normalized histogram of
+            a given input data x considering B bins the normalization is
+            obtained by dividing the bins by the maximum bin count observed for x
+    bins:   array cntaining the bin number for each of the nodes
+    '''
+    def __init__(self):
+        self.mse_loss = nn.MSELoss()
+        self.w = torch.tensor([ 0.        , 0.99642002, 0.98426235, 0.98878362, 0.99238034,
+                            0.99307446, 0.99390994, 0.99472743, 0.9950033 , 0.99566846,
+                            0.99590287, 0.99623921, 0.99651671, 0.9967781 , 0.99697434,
+                            0.99723892, 0.99739957, 0.99759485, 0.99775992, 0.99791533,
+                            0.99806807, 0.99821832, 0.9983513 , 0.99847849, 0.99859873,
+                            0.99871466, 0.99882233, 0.99892386, 0.99901531, 0.99910465,
+                            0.99918669, 0.99926336, 0.99933623, 0.99940208, 0.99946314,
+                            0.99952095, 0.99957535, 0.99962395, 0.99966931, 0.99970927,
+                            0.99974675, 0.99977871, 0.99980896, 0.99983382, 0.99985627,
+                            0.99987556, 0.99989255, 0.99990629, 0.99991901, 0.99993024,
+                            0.99993977, 0.99994795, 0.9999549 , 0.99996135, 0.99996669,
+                            0.99997151, 0.99997533, 0.99997917, 0.99998247, 0.99998511,
+                            0.99998759, 0.99998951, 0.99999137, 0.99999283, 0.99999403,
+                            0.99999504, 0.99999606, 0.99999673, 0.99999742, 0.99999785,
+                            0.99999831, 0.99999861, 0.99999885, 0.99999907, 0.99999925,
+                            0.99999941, 0.9999995 , 0.99999959, 0.99999967, 0.9999997 ,
+                            0.99999974, 0.99999982, 0.99999982, 0.99999986, 0.99999988,
+                            0.99999988, 0.9999999 , 0.99999992, 0.99999992, 0.99999995,
+                            0.99999995, 0.99999996, 0.99999996, 0.99999997, 0.99999997,
+                            0.99999997, 0.99999998, 0.99999999, 0.99999999, 1.        ])
+    
+    def __call__(self, prediction_batch, target_batch, bins, device):
+        loss_quantized = 0
+        self.w = self.w.to(device)
+        bins = bins.int()
+        for b in torch.unique(bins):
+            mask_b = bins == b
+            omega = mask_b.sum()
+            loss_quantized += 1/omega * self.w[b] * (torch.abs(prediction_batch * mask_b - target_batch * mask_b))
+        loss_mse = self.mse_loss(prediction_batch, target_batch) 
+        return loss_mse + 250 * torch.mean(loss_quantized)
+        #return torch.mean(loss_quantized)
+
+
 def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, threshold=np.log1p(1)):
     mask_low = ground_truth <= threshold
     loss_low = mask_low * torch.max(q_low*(ground_truth-predictions), (1-q_low)*(predictions-ground_truth))
@@ -340,6 +403,7 @@ class Trainer(object):
 
     def train_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
                         epoch_start, alpha=0.75, gamma=2):
+        
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the classifier.")
@@ -368,7 +432,9 @@ class Trainer(object):
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+#                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                w = graph['high'].w[train_mask]
+                loss = loss_fn(y_pred, y, w)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
@@ -405,7 +471,9 @@ class Trainer(object):
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+#                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                w = graph['high'].w[train_mask]
+                loss = loss_fn(y_pred, y, w)
                 acc = accuracy_binary_one(y_pred, y)
                 acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
 
@@ -420,7 +488,7 @@ class Trainer(object):
 
     def train_reg(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         
-        mse_loss = nn.MSELoss()
+        #mse_loss = nn.MSELoss()
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the regressor.")
@@ -430,9 +498,9 @@ class Trainer(object):
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
             loss_meter = AverageMeter()
-            rmse_loss_meter = AverageMeter()
+            #rmse_loss_meter = AverageMeter()
             loss_meter_val = AverageMeter()
-            rmse_loss_meter_val = AverageMeter()
+            #rmse_loss_meter_val = AverageMeter()
             
             start = time.time()
 
@@ -443,19 +511,19 @@ class Trainer(object):
                 y = graph['high'].y[train_mask]
                 #loss = loss_fn(y_pred, y)
                 w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
+                loss = loss_fn(y_pred, y, w, accelerator.device)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
-                loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                rmse_loss_meter.update(val=loss_rmse.item(), n=1)    
-                accelerator.log({'epoch':epoch, 'RMSE loss iteration': rmse_loss_meter.val, 'RMSE loss avg': rmse_loss_meter.avg})
-
+                #loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
+                #rmse_loss_meter.update(val=loss_rmse.item(), n=1)    
+                #accelerator.log({'epoch':epoch, 'RMSE loss iteration': rmse_loss_meter.val, 'RMSE loss avg': rmse_loss_meter.avg})
+                
             end = time.time()
             accelerator.log({'loss epoch': loss_meter.avg})
-            accelerator.log({'RMSE loss epoch': rmse_loss_meter.avg})
+            #accelerator.log({'RMSE loss epoch': rmse_loss_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
@@ -476,13 +544,13 @@ class Trainer(object):
                 y = graph['high'].y[train_mask]
                 #loss = loss_fn(y_pred, y)
                 w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
+                loss = loss_fn(y_pred, y, w, accelerator.device)
                 loss_meter_val.update(val=loss.item(), n=1)    
-                loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
+                #loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
+                #rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
-            accelerator.log({'validation RMSE loss': rmse_loss_meter_val.avg})
+            #accelerator.log({'validation RMSE loss': rmse_loss_meter_val.avg})
         return model
     
 

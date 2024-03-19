@@ -65,10 +65,6 @@ if __name__ == '__main__':
         accelerator = None
 
     if accelerator is None or accelerator.is_main_process:
-        with open(args.output_path + args.log_file, 'w') as f:
-            f.write(f"Starting!")
-
-    if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'w') as f:
             f.write("Starting the training...")
             f.write(f"Cuda is available: {torch.cuda.is_available()}. There are {torch.cuda.device_count()} available GPUs.")
@@ -81,7 +77,7 @@ if __name__ == '__main__':
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year_input)
     
-    test_start_idx_input = max(test_start_idx_input,24)
+    #test_start_idx = max(24, test_start_idx-24)
 
     with open(args.input_path+"pr_gripho.pkl", 'rb') as f:
         pr_gripho = pickle.load(f)
@@ -89,9 +85,12 @@ if __name__ == '__main__':
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
 
-    pr_gripho = pr_gripho[:, test_start_idx:test_end_idx]
+    pr_gripho = pr_gripho[:,test_start_idx:test_end_idx]
 
-    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input-24:test_end_idx_input,:]    
+    if args.dataset_name == "Dataset_Graph_CNN_GNN":
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,test_start_idx_input:test_end_idx_input]    
+    else:
+        low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input:test_end_idx_input,:]    
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     dataset_graph = Dataset_Graph(targets=None, graph=low_high_graph)
@@ -154,7 +153,7 @@ if __name__ == '__main__':
     pr_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,-1)[:,indices]
 
     data = HeteroData()
-    data.pr_gripho = pr_gripho
+    data.pr_gripho = pr_gripho[:,24:] # No predictions for the first 24 hours (since we use the 24h before to make a prediction)
     data.pr_cl = pr_cl
     data.pr_reg = pr_reg
     data.pr = pr_cl * pr_reg

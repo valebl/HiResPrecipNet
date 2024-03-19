@@ -12,6 +12,7 @@ import argparse
 import sys
 import os
 import dataset
+import wandb
 
 import HiResPrecipNet as models
 import utils
@@ -104,7 +105,6 @@ if __name__ == '__main__':
         with open(args.output_path+args.log_file, 'w') as f:
             f.write(f"Cuda is available: {torch.cuda.is_available()}. There are {torch.cuda.device_count()} available GPUs.")
 
-
 #-----------------------------------------------------
 #--------------- MODEL, LOSS, OPTIMIZER --------------
 #-----------------------------------------------------
@@ -127,6 +127,10 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn) 
     elif args.loss_fn == 'modified_mse_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'quantized_loss':
+        loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'quantized_loss_crossentropy':
+        loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'threshold_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)
     else:
@@ -140,7 +144,7 @@ if __name__ == '__main__':
     train_start_idx, train_end_idx = date_to_idxs(args.train_year_start, args.train_month_start,
                                                                       args.train_day_start, args.train_year_end, args.train_month_end,
                                                                       args.train_day_end, args.first_year)
-    train_start_idx = max(train_start_idx,24)
+    #train_start_idx = max(train_start_idx,24)
 
     val_start_idx, val_end_idx = date_to_idxs(2007, 1, 1, 2007, 12, 31, 2001)
 
@@ -151,8 +155,11 @@ if __name__ == '__main__':
         target_train = pickle.load(f)
 
     # Define input and target
-    low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx)-24:max(train_end_idx, val_end_idx),:]
-    target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]
+    if args.dataset_name == "Dataset_Graph_CNN_GNN":
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # 0, 140256
+    else:
+        low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # 0, 140256
+    target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # 0, 140256
 
 
     # Define a mask to ignore time indexes with all nan values
@@ -192,7 +199,7 @@ if __name__ == '__main__':
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     
-    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "weighted_mse_loss_ASYM":
+    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "quantized_loss" or args.loss_fn == "quantized_loss_crossentropy":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
         weights_reg = weights_reg[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]
@@ -247,7 +254,6 @@ if __name__ == '__main__':
 #------------------ LOAD PARAMETERS ------------------
 #-----------------------------------------------------
 
-
     epoch_start=0
     
     if args.ctd_training:
@@ -278,7 +284,7 @@ if __name__ == '__main__':
 #-----------------------------------------------------
 #----------------------- TRAIN -----------------------
 #-----------------------------------------------------
-
+    
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
             f.write(f"\nUsing pct_trainset={args.pct_trainset}, lr={optimizer.param_groups[0]['lr']:.8f}, " +
