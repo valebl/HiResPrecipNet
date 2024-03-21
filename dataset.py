@@ -305,7 +305,7 @@ class Dataset_Graph_CNN_GNN(Dataset):
     def _get_features(self, time_index: int):
         time_index_x = time_index
         #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
-        x_low = self.graph['low'].x[:,:,:,time_index_x-24:time_index_x+1] # low_num_nodes,vars=5,lev=5,time=5
+        x_low = self.graph['low'].x[:,:,:,time_index_x-24:time_index_x+1:6] # low_num_nodes,vars=5,lev=5,time=5
         #x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low
     
@@ -349,15 +349,15 @@ class Dataset_Graph_CNN_GNN(Dataset):
         snapshot['low_upscaled'].num_nodes = self.graph['low_upscaled'].lon.shape[0]
         snapshot.t = time_index
         
-        snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
-        snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
         snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
         snapshot['low_upscaled', 'within', 'low_upscaled'].edge_index = self.graph['low_upscaled', 'within', 'low_upscaled'].edge_index
+        snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
+        snapshot['low', 'to', 'low_upscaled'].edge_index = self.graph['low', 'to', 'low_upscaled'].edge_index
         snapshot['low_upscaled', 'to', 'high'].edge_index = self.graph['low_upscaled', 'to', 'high'].edge_index
 
         snapshot['low'].x = x_low 
-        #snapshot['high'].x_empty = self.graph['high'].x
-        snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
+        snapshot['low_upscaled'].x = self.graph['low_upscaled'].x
+        snapshot['high'].x = self.graph['high'].x
         snapshot['high'].z_std = self.graph['high'].z_std
 
         snapshot['high'].lon = self.graph['high'].lon

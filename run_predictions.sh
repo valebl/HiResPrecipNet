@@ -4,7 +4,7 @@ mkdir -p ${LOG_PATH}
 
 sbatch << EOT
 #!/bin/bash
-#SBATCH -A ict24_esp #ict24_esp
+#SBATCH -A ict23_esp_0 #ict24_esp
 #SBATCH -p boost_usr_prod
 #SBATCH --time=${TIME}       # format: HH:MM:SS
 #SBATCH -N 1                  # 1 node
