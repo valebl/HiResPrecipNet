@@ -116,7 +116,7 @@ class Hierarchical_HiResPrecipNet(nn.Module):
 
 class HiResPrecipNet_CNN_GNN(nn.Module):
     
-    def __init__(self, high_in=1, low_up_hidden=32, high_hidden=32, upscaled_dim=25,
+    def __init__(self, high_in=1, low_up_in=23, low_up_hidden=32, high_hidden=32, upscaled_dim=25,
                  kernel=3, nvars=5, ntimes=5, nlevs=5, high_attr_dim=1):
         super(HiResPrecipNet_CNN_GNN, self).__init__()
 
@@ -161,7 +161,7 @@ class HiResPrecipNet_CNN_GNN(nn.Module):
         )
 
         self.processor_upscaled = geometric_nn.Sequential('x, edge_index', [
-            (GATv2Conv(in_channels=low_up_hidden, out_channels=low_up_hidden, heads=2, dropout=0.2, aggr='mean', add_self_loops=False, bias=True), 'x, edge_index -> x'),
+            (GATv2Conv(in_channels=low_up_in, out_channels=low_up_hidden, heads=2, dropout=0.2, aggr='mean', add_self_loops=False, bias=True), 'x, edge_index -> x'),
             (geometric_nn.BatchNorm(low_up_hidden*2), 'x -> x'), 
             nn.ReLU(),
             (GATv2Conv(in_channels=low_up_hidden*2, out_channels=low_up_hidden, heads=2, dropout=0.2, aggr='mean', add_self_loops=False, bias=True),'x, edge_index -> x'),
@@ -207,12 +207,13 @@ class HiResPrecipNet_CNN_GNN(nn.Module):
 
     def forward(self, data): 
         encod_cnn = self.node_encoder_cnn(data.x_dict['low'])
-        encod_low = self.processor_low(encod_cnn, data.edge_index_dict[('low','within','low')]).squeeze()
-        encod_low_upscaled = self.node_upscaler_cnn(encod_low.unsqueeze(1)).flatten(end_dim=1)
-        encod_low2high  = self.downscaler((encod_low_upscaled, data['high'].z_std), data.edge_index_dict[('low_upscaled','to','high')])
+        #encod_low = self.processor_low(encod_cnn, data.edge_index_dict[('low','within','low')]).squeeze()
+        encod_low_upscaled = self.node_upscaler_cnn(encod_cnn.unsqueeze(1)).flatten(end_dim=1)
+        encod_low_upscaled = self.processor_upscaled(encod_low_upscaled, data.edge_index_dict[('low_upscaled','within','low_upscaled')]).squeeze()
+        encod_upscaled2high  = self.downscaler_upscaled2high((encod_low_upscaled, data['high'].z_std), data.edge_index_dict[('low_upscaled','to','high')])
         # encod_low2high  = self.downscaler((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
-        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
-        encod_high = self.processor(encod_low2high, data.edge_index_dict[('high','within','high')])
+        encod_upscaled2high  = torch.concatenate((data['high'].z_std, encod_upscaled2high ),dim=-1)
+        encod_high = self.processor_high(encod_upscaled2high, data.edge_index_dict[('high','within','high')])
         y_pred = self.predictor(encod_high)
         return y_pred
     

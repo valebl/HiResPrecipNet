@@ -536,18 +536,19 @@ class Trainer(object):
             
             model.eval()
             # Perform validation step
-            for graph in dataloader_val:
-                
-                train_mask = graph["high"].train_mask
+            with torch.no_grad():
+                for graph in dataloader_val:
+                    
+                    train_mask = graph["high"].train_mask
 
-                y_pred = model(graph).squeeze()[train_mask]
-                y = graph['high'].y[train_mask]
-                #loss = loss_fn(y_pred, y)
-                w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w, accelerator.device)
-                loss_meter_val.update(val=loss.item(), n=1)    
-                #loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                #rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
+                    y_pred = model(graph).squeeze()[train_mask]
+                    y = graph['high'].y[train_mask]
+                    #loss = loss_fn(y_pred, y)
+                    w = graph['high'].w[train_mask]
+                    loss = loss_fn(y_pred, y, w, accelerator.device)
+                    loss_meter_val.update(val=loss.item(), n=1)    
+                    #loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
+                    #rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
             #accelerator.log({'validation RMSE loss': rmse_loss_meter_val.avg})
