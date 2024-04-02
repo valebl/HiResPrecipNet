@@ -112,8 +112,8 @@ if __name__ == '__main__':
         checkpoint_reg = torch.load(args.checkpoint_reg, map_location=torch.device('cpu'))
         device = 'cpu'
     else:
-        checkpoint_cl = torch.load(args.checkpoint_cl)
-        checkpoint_reg = torch.load(args.checkpoint_reg)
+        checkpoint_cl = torch.load(args.checkpoint_cl, map_location=accelerator.device)
+        checkpoint_reg = torch.load(args.checkpoint_reg, map_location=accelerator.device)
         device = accelerator.device
     
     if accelerator is None or accelerator.is_main_process:

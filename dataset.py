@@ -105,11 +105,20 @@ class Dataset_Graph(Dataset):
         
         #snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
+
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+
+        snapshot['low_9x', 'within', 'low_9x'].edge_index = self.graph['low_9x', 'within', 'low_9x'].edge_index
+        snapshot['low_25x', 'within', 'low_25x'].edge_index = self.graph['low_25x', 'within', 'low_25x'].edge_index
+        snapshot['low', 'to', 'low_9x'].edge_index = self.graph['low', 'to', 'low_9x'].edge_index
+        snapshot['low_9x', 'to', 'low_25x'].edge_index = self.graph['low_9x', 'to', 'low_25x'].edge_index
+        snapshot['low_25x', 'to', 'high'].edge_index = self.graph['low_25x', 'to', 'high'].edge_index
+        snapshot['low_9x'].x = self.graph['low_9x'].x 
+        snapshot['low_25x'].x = self.graph['low_25x'].x 
 
         snapshot['low'].x = x_low 
         #snapshot['high'].x_empty = self.graph['high'].x
-        snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
+        snapshot['high'].x = self.graph['high'].x #torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
 
         snapshot['high'].lon = self.graph['high'].lon
@@ -346,18 +355,43 @@ class Dataset_Graph_CNN_GNN(Dataset):
         snapshot.num_nodes = self.graph.num_nodes
         snapshot['high'].num_nodes = self.graph['high'].num_nodes
         snapshot['low'].num_nodes = self.graph['low'].num_nodes
-        snapshot['low_upscaled'].num_nodes = self.graph['low_upscaled'].lon.shape[0]
+
+        ######
+        # snapshot['low_upscaled'].num_nodes = self.graph['low_upscaled'].lon.shape[0]
         snapshot.t = time_index
         
-        snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
-        snapshot['low_upscaled', 'within', 'low_upscaled'].edge_index = self.graph['low_upscaled', 'within', 'low_upscaled'].edge_index
+        # snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
+        # snapshot['low_upscaled', 'within', 'low_upscaled'].edge_index = self.graph['low_upscaled', 'within', 'low_upscaled'].edge_index
+        # snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
+        # snapshot['low', 'to', 'low_upscaled'].edge_index = self.graph['low', 'to', 'low_upscaled'].edge_index
+        # snapshot['low_upscaled', 'to', 'high'].edge_index = self.graph['low_upscaled', 'to', 'high'].edge_index
+
+        # snapshot['low'].x = x_low 
+        # snapshot['low_upscaled'].x = self.graph['low_upscaled'].x
+        # snapshot['high'].x = self.graph['high'].x
+        # snapshot['high'].z_std = self.graph['high'].z_std
+
+        # snapshot['high'].lon = self.graph['high'].lon
+        # snapshot['high'].lat = self.graph['high'].lat
+        # snapshot['low'].lon = self.graph['low'].lon
+        # snapshot['low'].lat = self.graph['low'].lat
+        ######
+
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
-        snapshot['low', 'to', 'low_upscaled'].edge_index = self.graph['low', 'to', 'low_upscaled'].edge_index
-        snapshot['low_upscaled', 'to', 'high'].edge_index = self.graph['low_upscaled', 'to', 'high'].edge_index
+
+        snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+
+        snapshot['low_9x', 'within', 'low_9x'].edge_index = self.graph['low_9x', 'within', 'low_9x'].edge_index
+        snapshot['low_25x', 'within', 'low_25x'].edge_index = self.graph['low_25x', 'within', 'low_25x'].edge_index
+        snapshot['low', 'to', 'low_9x'].edge_index = self.graph['low', 'to', 'low_9x'].edge_index
+        snapshot['low_9x', 'to', 'low_25x'].edge_index = self.graph['low_9x', 'to', 'low_25x'].edge_index
+        snapshot['low_25x', 'to', 'high'].edge_index = self.graph['low_25x', 'to', 'high'].edge_index
+        snapshot['low_9x'].x = self.graph['low_9x'].x 
+        snapshot['low_25x'].x = self.graph['low_25x'].x 
 
         snapshot['low'].x = x_low 
-        snapshot['low_upscaled'].x = self.graph['low_upscaled'].x
-        snapshot['high'].x = self.graph['high'].x
+        #snapshot['high'].x_empty = self.graph['high'].x
+        snapshot['high'].x = self.graph['high'].x #torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
 
         snapshot['high'].lon = self.graph['high'].lon

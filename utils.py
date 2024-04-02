@@ -15,6 +15,10 @@ from datetime import datetime, date
 import torch
 import torch.nn.functional as F
 
+from torch.autograd import Variable
+
+from torchvision.ops import sigmoid_focal_loss
+
 ######################################################
 #------------------ GENERAL UTILITIES ---------------
 ######################################################
@@ -60,7 +64,7 @@ def retain_valid_nodes(lon, lat, pr, z):
     valid_nodes = ~torch.isnan(pr).all(dim=0)
     lon = lon[valid_nodes]
     lat = lat[valid_nodes]
-    pr = pr[:,valid_nodes]
+    pr = pr[:,valid_nodes] 
     z = z[valid_nodes]
     return lon, lat, pr, z
 
@@ -312,6 +316,39 @@ class quantized_loss():
     '''
     def __init__(self):
         self.mse_loss = nn.MSELoss()
+        self.gamma = 1
+        # self.w = torch.tensor([0.        , 0.97314211, 0.98550669, 0.98867791, 0.99070504,
+        #                     0.99217012, 0.99331872, 0.9942339 , 0.99501228, 0.99569069,
+        #                     0.99629964, 0.9968411 , 0.99732297, 0.99775423, 0.99812667,
+        #                     0.99845558, 0.99874281, 0.99898771, 0.99920216, 0.9993808 ,
+        #                     0.99952715, 0.99964406, 0.99973279, 0.99979955, 0.99984979,
+        #                     0.99988813, 0.99991655, 0.99993842, 0.99995466, 0.9999677 ,
+        #                     0.99997718, 0.99998426, 0.99998911, 0.99999282, 0.99999528,
+        #                     0.99999693, 0.99999793, 0.99999866, 0.99999909, 0.99999937,
+        #                     0.99999956, 0.99999968, 0.99999977, 0.99999983, 0.99999987,
+        #                     0.9999999 , 0.99999993, 0.99999995, 0.99999997, 0.99999999])
+
+        # self.w = torch.tensor([0.        , 0.23986506, 0.53060533, 0.57122705, 0.61302775,
+        #                         0.67614517, 0.69597921, 0.72391865, 0.74754971, 0.76440881,
+        #                         0.78548478, 0.79851332, 0.81427415, 0.82624273, 0.83837927,
+        #                         0.84972993, 0.85968978, 0.86968089, 0.87895801, 0.88769771,
+        #                         0.89589746, 0.90379577, 0.91112076, 0.91828936, 0.92493525,
+        #                         0.93118279, 0.93700937, 0.94236466, 0.94743576, 0.95224705,
+        #                         0.95677888, 0.9609333 , 0.96476712, 0.96833488, 0.97174368,
+        #                         0.97491694, 0.97773601, 0.98039223, 0.98273215, 0.98490067,
+        #                         0.9868026 , 0.98856462, 0.99003911, 0.99136291, 0.99249696,
+        #                         0.99350548, 0.9943257 , 0.99507764, 0.99574782, 0.9963224 ,
+        #                         0.99681511, 0.99722419, 0.99762647, 0.99794052, 0.9982412 ,
+        #                         0.99846454, 0.99869109, 0.99890058, 0.99906662, 0.99921134,
+        #                         0.99933734, 0.99944613, 0.99954329, 0.99961771, 0.9996794 ,
+        #                         0.99974081, 0.99978494, 0.99982973, 0.99985965, 0.9998868 ,
+        #                         0.99990736, 0.99992468, 0.99993866, 0.99994849, 0.99995898,
+        #                         0.99996711, 0.99997322, 0.99997683, 0.99998012, 0.99998348,
+        #                         0.99998536, 0.99998966, 0.99998952, 0.99999216, 0.99999299,
+        #                         0.99999292, 0.99999461, 0.99999552, 0.99999548, 0.99999675,
+        #                         0.99999664, 0.99999776, 0.9999978 , 0.99999798, 0.99999834,
+        #                         0.99999845, 0.99999895, 0.99999935, 0.99999967, 0.99999982])
+        
         self.w = torch.tensor([ 0.        , 0.99642002, 0.98426235, 0.98878362, 0.99238034,
                             0.99307446, 0.99390994, 0.99472743, 0.9950033 , 0.99566846,
                             0.99590287, 0.99623921, 0.99651671, 0.9967781 , 0.99697434,
@@ -340,10 +377,52 @@ class quantized_loss():
         for b in torch.unique(bins):
             mask_b = bins == b
             omega = mask_b.sum()
-            loss_quantized += 1/omega * self.w[b] * (torch.abs(prediction_batch * mask_b - target_batch * mask_b))
+            loss_quantized += 1/omega * self.w[b]**self.gamma * (torch.abs(prediction_batch * mask_b - target_batch * mask_b))
         loss_mse = self.mse_loss(prediction_batch, target_batch) 
         return loss_mse + 250 * torch.mean(loss_quantized)
         #return torch.mean(loss_quantized)
+    
+class quantized_focal_loss():
+    '''
+    w:      weight, computed as 1-h, where h is normalized histogram of
+            a given input data x considering B bins the normalization is
+            obtained by dividing the bins by the maximum bin count observed for x
+    bins:   array cntaining the bin number for each of the nodes
+    '''
+    def __init__(self):
+        self.focal_loss = sigmoid_focal_loss
+        self.w = torch.tensor([ 0.        , 0.99642002, 0.98426235, 0.98878362, 0.99238034,
+                            0.99307446, 0.99390994, 0.99472743, 0.9950033 , 0.99566846,
+                            0.99590287, 0.99623921, 0.99651671, 0.9967781 , 0.99697434,
+                            0.99723892, 0.99739957, 0.99759485, 0.99775992, 0.99791533,
+                            0.99806807, 0.99821832, 0.9983513 , 0.99847849, 0.99859873,
+                            0.99871466, 0.99882233, 0.99892386, 0.99901531, 0.99910465,
+                            0.99918669, 0.99926336, 0.99933623, 0.99940208, 0.99946314,
+                            0.99952095, 0.99957535, 0.99962395, 0.99966931, 0.99970927,
+                            0.99974675, 0.99977871, 0.99980896, 0.99983382, 0.99985627,
+                            0.99987556, 0.99989255, 0.99990629, 0.99991901, 0.99993024,
+                            0.99993977, 0.99994795, 0.9999549 , 0.99996135, 0.99996669,
+                            0.99997151, 0.99997533, 0.99997917, 0.99998247, 0.99998511,
+                            0.99998759, 0.99998951, 0.99999137, 0.99999283, 0.99999403,
+                            0.99999504, 0.99999606, 0.99999673, 0.99999742, 0.99999785,
+                            0.99999831, 0.99999861, 0.99999885, 0.99999907, 0.99999925,
+                            0.99999941, 0.9999995 , 0.99999959, 0.99999967, 0.9999997 ,
+                            0.99999974, 0.99999982, 0.99999982, 0.99999986, 0.99999988,
+                            0.99999988, 0.9999999 , 0.99999992, 0.99999992, 0.99999995,
+                            0.99999995, 0.99999996, 0.99999996, 0.99999997, 0.99999997,
+                            0.99999997, 0.99999998, 0.99999999, 0.99999999, 1.        ])
+    
+    def __call__(self, prediction_batch, target_batch, bins, device):
+        loss_quantized = 0
+        self.w = self.w.to(device)
+        bins = bins.int()
+        for b in torch.unique(bins):
+            mask_b = bins == b
+            omega = mask_b.sum()
+            loss_quantized += 1/omega * self.focal_loss(prediction_batch * mask_b, target_batch * mask_b, alpha=-1,gamma=2, reduction='none')
+        #return loss_quantized
+        return torch.mean(loss_quantized)
+    
 
 
 def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, threshold=np.log1p(1)):
@@ -432,9 +511,9 @@ class Trainer(object):
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-#                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
-                w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
+                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+#                w = graph['high'].w[train_mask]
+#                loss = loss_fn(y_pred, y, w, accelerator.device)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
@@ -465,22 +544,23 @@ class Trainer(object):
             
             model.eval()
             # Perform validation step
-            for graph in dataloader_val:
-                
-                train_mask = graph["high"].train_mask
+            with torch.no_grad():
+                for graph in dataloader_val:
+                    
+                    train_mask = graph["high"].train_mask
 
-                y_pred = model(graph).squeeze()[train_mask]
-                y = graph['high'].y[train_mask]
-#                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
-                w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
-                acc = accuracy_binary_one(y_pred, y)
-                acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
+                    y_pred = model(graph).squeeze()[train_mask]
+                    y = graph['high'].y[train_mask]
+                    loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+#                    w = graph['high'].w[train_mask]
+#                    loss = loss_fn(y_pred, y, w)
+                    acc = accuracy_binary_one(y_pred, y)
+                    acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
 
-                loss_meter_val.update(val=loss.item(), n=1)    
-                acc_meter_val.update(val=acc, n=1)
-                acc_class0_meter_val.update(val=acc_class0, n=1)
-                acc_class1_meter_val.update(val=acc_class1, n=1)
+                    loss_meter_val.update(val=loss.item(), n=1)    
+                    acc_meter_val.update(val=acc, n=1)
+                    acc_class0_meter_val.update(val=acc_class0, n=1)
+                    acc_class1_meter_val.update(val=acc_class1, n=1)
             
             accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
                                 'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg})

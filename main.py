@@ -129,7 +129,7 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'quantized_loss':
         loss_fn = getattr(utils, args.loss_fn)()
-    elif args.loss_fn == 'quantized_loss_crossentropy':
+    elif args.loss_fn == 'quantized_focal_loss':
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'threshold_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)
@@ -199,7 +199,7 @@ if __name__ == '__main__':
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     
-    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "quantized_loss" or args.loss_fn == "quantized_loss_crossentropy":
+    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "quantized_loss" or args.loss_fn == "quantized_focal_loss":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
         weights_reg = weights_reg[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]

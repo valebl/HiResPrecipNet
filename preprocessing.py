@@ -196,9 +196,9 @@ if __name__ == '__main__':
     # New dataset, to perform "hierarchical" graph learning
     input_ds_standard_var_lev = input_ds_standard.clone()
     
-    with open(args.output_path + "low_high_graph_hierarchical.pkl", 'wb') as f:
-        pickle.dump(input_ds_standard_var_lev, f)
-    sys.exit()
+    # with open(args.output_path + "low_high_graph_hierarchical.pkl", 'wb') as f:
+    #     pickle.dump(input_ds_standard_var_lev, f)
+    # sys.exit()
 
     input_ds_standard = torch.flatten(input_ds_standard, start_dim=2, end_dim=-1)
 
@@ -280,14 +280,14 @@ if __name__ == '__main__':
 
     #-- WRITE THE FILES --#
 
-    with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
-        pickle.dump(pr_sel_cl, f)    
+    # with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
+    #     pickle.dump(pr_sel_cl, f)    
      
-    with open(args.output_path + 'target_train_reg.pkl', 'wb') as f:
-        pickle.dump(pr_sel_reg, f)    
+    # with open(args.output_path + 'target_train_reg.pkl', 'wb') as f:
+    #     pickle.dump(pr_sel_reg, f)    
 
-    with open(args.output_path + 'reg_weights.pkl', 'wb') as f:
-        pickle.dump(reg_weights, f)    
+    # with open(args.output_path + 'reg_weights.pkl', 'wb') as f:
+    #     pickle.dump(reg_weights, f)    
 
     with open(args.output_path + 'pr_gripho.pkl', 'wb') as f:
         pickle.dump(pr_high, f)    
