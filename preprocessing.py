@@ -69,7 +69,7 @@ if __name__ == '__main__':
 
     if args.predictors_type == "era5":
         params = ['q', 't', 'u', 'v', 'z']
-    elif args.predictors_type == "regcm":
+    elif args.predictors_type == "regcm" or args.predictors_type == "mohc":
         params = ['hus', 'ta', 'ua', 'va', 'zg']
     else:
         raise Exception("args.predictors_type should be either era5 or regcm")
@@ -111,6 +111,27 @@ if __name__ == '__main__':
                         input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # time, variables, levels, lat, lon
                 input_ds[:, p_idx,l_idx,:,:] = data
 
+        elif args.predictors_type == "mohc":
+            with nc.Dataset(f'{args.input_path_phase_2}{args.input_files_prefix_low}{p}.nc') as ds:
+                for l_idx, level in enumerate(['200', '500', '700', '850', '1000']):
+                    write_log(f'\nPreprocessing {args.input_files_prefix_low}{p}.nc for level {level}', args)
+                    var_name = f"{p}{level}"
+                    _data = ds[var_name][:]
+                    if "zg" in var_name:
+                        _data *= 9.81
+                        write_log(f'\nMultiplying {var_name} by 9.81 to get kg*m^2/s^2.', args, 'a')
+                    if p_idx == 0 and l_idx == 0: # first parameter being processed -> get dimensions and initialize the input dataset
+                        lat_low = ds['latitude'][:]
+                        lon_low = ds['longitude'][:]
+                        lat_dim = len(lat_low)
+                        lon_dim = len(lon_low)
+                        time_dim = len(ds['time'])
+                        input_ds = np.zeros((time_dim, n_params, args.n_levels_low, lat_dim, lon_dim), dtype=np.float32) # time, variables, levels, lat, lon
+                    data = torch.from_numpy(_data)
+                    mask = torch.from_numpy(_data.mask.astype(bool))
+                    data[mask] = torch.nan
+                    input_ds[:, p_idx,l_idx,:,:] = data.numpy()
+
     lat_low, lon_low = torch.meshgrid(torch.flip(torch.tensor(lat_low),[0]), torch.tensor(lon_low), indexing='ij')
 
     lat_low = lat_low.flatten()
@@ -121,6 +142,7 @@ if __name__ == '__main__':
     #--------------------------#
         
     #-- Flip the dataset --#
+    #if args.predictors_type == "era5" or args.predictors_type == "regcm":
     input_ds = np.flip(input_ds, 3) # the origin in the input files is in the top left corner, while we use the bottom left corner    
 
     #####################################################################################
@@ -158,8 +180,8 @@ if __name__ == '__main__':
             means = np.zeros((5))
             stds = np.zeros((5))
             for var in range(5):
-                m = np.mean(input_ds[:,var,:,:,:])
-                s = np.std(input_ds[:,var,:,:,:])
+                m = np.nanmean(input_ds[:,var,:,:,:])
+                s = np.nanstd(input_ds[:,var,:,:,:])
                 input_ds_standard[:,var,:,:,:] = (input_ds[:,var,:,:,:]-m)/s
                 means[var] = m
                 stds[var] = s
@@ -172,8 +194,8 @@ if __name__ == '__main__':
             stds = np.zeros((5,5))
             for var in range(5):
                 for lev in range(5):
-                    m = np.mean(input_ds[:,var,lev,:,:])
-                    s = np.std(input_ds[:,var,lev,:,:])
+                    m = np.nanmean(input_ds[:,var,lev,:,:])
+                    s = np.nanstd(input_ds[:,var,lev,:,:])
                     input_ds_standard[:,var,lev,:,:] = (input_ds[:,var,lev,:,:]-m)/s
                     means[var, lev] = m
                     stds[var, lev] = s
@@ -211,7 +233,7 @@ if __name__ == '__main__':
     ##--------- PREPROCESSING HIGH RES DATA ------------##
     ######################################################
 
-    write_log(f"\n\nStarting the preprocessing of low resolution data.", args)
+    write_log(f"\n\nStarting the preprocessing of high resolution data.", args)
 
     #-------------------------------#
     # CUT LON, LAT, PR, Z TO WINDOW #
@@ -223,12 +245,23 @@ if __name__ == '__main__':
     lon = torch.tensor(gripho.lon.to_numpy())
     lat = torch.tensor(gripho.lat.to_numpy())
     pr = torch.tensor(gripho.pr.to_numpy())
-    z = torch.tensor(topo.z.to_numpy())
+
+    if args.predictors_type == "mohc":
+        z = torch.tensor(topo.orog.to_numpy())
+        mask_land = xr.open_dataset(args.input_path_gripho + "mask_land_remapped_mohc.nc")
+        mask_land = torch.tensor(mask_land.pr.to_numpy()).squeeze()    
+    else:
+        z = torch.tensor(topo.z.to_numpy())
+        mask_land = None
+
+    if args.predictors_type == "mohc":
+        pr *= 3600
+        write_log(f'\nMultiplying pr by 3600 to get mm.', args, 'a')
 
     write_log("\nCutting the window...", args)
 
     #-- Cut gripho and topo to the desired window --#
-    lon_high, lat_high, z_high, pr_high = cut_window(args.lon_min, args.lon_max, args.lat_min, args.lat_max, lon, lat, z, pr)
+    lon_high, lat_high, z_high, pr_high, mask_land = cut_window(args.lon_min, args.lon_max, args.lat_min, args.lat_max, lon, lat, z, pr, mask_land)
 
     write_log(f"\nDone! Window is [{lon_high.min()}, {lon_high.max()}] x [{lat_high.min()}, {lat_high.max()}] with {pr_high.shape[1]} nodes.", args)
 
@@ -238,7 +271,7 @@ if __name__ == '__main__':
     # REMOVE NODES NOT IN LAND TERRITORY #
     #------------------------------------#
 
-    lon_high, lat_high, pr_high, z_high = retain_valid_nodes(lon_high, lat_high, pr_high, z_high)
+    lon_high, lat_high, pr_high, z_high = retain_valid_nodes(lon_high, lat_high, pr_high, z_high, mask_land)
     pr_high = pr_high.swapaxes(0,1) # (num_nodes, time)
 
     print(lon_high.shape, lat_high.shape, pr_high.shape, z_high.shape)
@@ -278,18 +311,21 @@ if __name__ == '__main__':
     #mean_all_weights = np.nanmean(reg_weights)
     #reg_weights[~torch.isnan(pr_high)] = reg_weights[~torch.isnan(pr_high)] / mean_all_weights
 
+    write_log("Writing some files...", args, 'a')
+
     #-- WRITE THE FILES --#
 
-    # with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
-    #     pickle.dump(pr_sel_cl, f)    
-     
-    # with open(args.output_path + 'target_train_reg.pkl', 'wb') as f:
-    #     pickle.dump(pr_sel_reg, f)    
+    if args.predictors_type == "era5":
+        with open(args.output_path + 'target_train_cl.pkl', 'wb') as f:
+            pickle.dump(pr_sel_cl, f)    
+        
+        with open(args.output_path + 'target_train_reg.pkl', 'wb') as f:
+            pickle.dump(pr_sel_reg, f)    
 
-    # with open(args.output_path + 'reg_weights.pkl', 'wb') as f:
-    #     pickle.dump(reg_weights, f)    
-
-    with open(args.output_path + 'pr_gripho.pkl', 'wb') as f:
+        with open(args.output_path + 'reg_weights.pkl', 'wb') as f:
+            pickle.dump(reg_weights, f)    
+            
+    with open(args.output_path + 'pr_target.pkl', 'wb') as f:
         pickle.dump(pr_high, f)    
 
 
@@ -322,22 +358,50 @@ if __name__ == '__main__':
     low_high_graph = HeteroData()
     high_graph = Data()
 
+    lon_upscaled_9x = []
+    di = round(0.25 / 3,3)
+
+    for lon in lon_low:
+        lon_values = [lon-di,lon,lon+di,
+                    lon-di,lon,lon+di,
+                    lon-di,lon,lon+di]
+        _ = [lon_upscaled_9x.append(l) for l in lon_values]
+
+    lon_upscaled_9x = torch.stack(lon_upscaled_9x)
+
+    lat_upscaled_9x = []
+    di = round(0.25 / 3,3)
+
+    for lat in lat_low:
+        lat_values = [lat-di,lat-di,lat-di,
+                    lat, lat, lat,
+                    lat+di,lat+di,lat+di]
+        _ = [lat_upscaled_9x.append(l) for l in lat_values]
+
+    lat_upscaled_9x = torch.stack(lat_upscaled_9x)
+
     #-- EDGES --#
 
     edges_high = derive_edge_indexes_within(lon_radius=args.lon_grid_radius_high, lat_radius=args.lat_grid_radius_high,
-                                  lon_n1=lon_high, lat_n1=lat_high, lon_n2=lon_high, lat_n2=lat_high)
+                                  lon_n1=lon_high.double(), lat_n1=lat_high.double(), lon_n2=lon_high.double(), lat_n2=lat_high.double())
     
-    edges_low2high = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
-                                  lon_n2=lon_high, lat_n2=lat_high)
+    edges_low2high = derive_edge_indexes_low2high(lon_n1=lon_low.double(), lat_n1=lat_low.double(),
+                                  lon_n2=lon_high.double(), lat_n2=lat_high.double())
 
     edges_low_horizontal = derive_edge_indexes_within(lon_radius=0.26, lat_radius=0.26,
-                                  lon_n1=lon_low, lat_n1=lat_low, lon_n2=lon_low, lat_n2=lat_low)
+                                  lon_n1=lon_low.double(), lat_n1=lat_low.double(), lon_n2=lon_low.double(), lat_n2=lat_low.double())
     
-    edges_low_vertical = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
-                                  lon_n2=lon_low, lat_n2=lat_low, n_knn=1, undirected=True)
+    edges_low_vertical_low_to_9x = derive_edge_indexes_low2high(lon_n1=lon_low.double(), lat_n1=lat_low.double(),
+                            lon_n2=lon_upscaled_9x.double(), lat_n2=lat_upscaled_9x.double(), n_knn=9)
+    
+    edges_low_vertical_9x_to_high = derive_edge_indexes_low2high(lon_n1=lon_upscaled_9x.double(), lat_n1=lat_upscaled_9x.double(),
+                            lon_n2=lon_high.double(), lat_n2=lat_high.double(), n_knn=9)
 
-    edges_low_vertical_directed = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
-                                  lon_n2=lon_low, lat_n2=lat_low, n_knn=1, undirected=False)
+    # edges_low_vertical = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
+    #                               lon_n2=lon_low, lat_n2=lat_low, n_knn=1, undirected=True)
+
+    # edges_low_vertical_directed = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
+    #                               lon_n2=lon_low, lat_n2=lat_low, n_knn=1, undirected=False)
     
     # edges_low2lowpr = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
     #                               lon_n2=lon_low, lat_n2=lat_low, n_knn=8)
@@ -348,15 +412,26 @@ if __name__ == '__main__':
     low_high_graph['low'].x = input_ds_standard
     low_high_graph['low'].lat = lat_low
     low_high_graph['low'].lon = lon_low
+    low_high_graph['low'].num_nodes = lon_low.shape[0]
 
-    low_high_graph['high'].x = torch.zeros((num_nodes_high, 0))
+    low_high_graph['high'].x = torch.zeros((num_nodes_high, 1), dtype=torch.float32)
     low_high_graph['high'].lat = lat_high
     low_high_graph['high'].lon = lon_high
     low_high_graph['high'].z_std = z_high_std.unsqueeze(-1)
+    low_high_graph['high'].num_nodes = lon_high.shape[0]
 
     low_high_graph['high', 'within', 'high'].edge_index = edges_high.swapaxes(0,1)
     low_high_graph['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
-    low_high_graph['low', 'within', 'low'].edge_index = edges_high.swapaxes(0,1)
+    low_high_graph['low', 'within', 'low'].edge_index = edges_low_horizontal.swapaxes(0,1)
+
+    low_high_graph["low_9x"].lon = lon_upscaled_9x
+    low_high_graph["low_9x"].lat = lat_upscaled_9x
+    low_high_graph["low_9x"].num_nodes = low_high_graph["low_9x"].lon.shape[0]
+
+    low_high_graph["low_9x"].x = torch.zeros((low_high_graph["low_9x"].num_nodes, 1), dtype=torch.float32)
+
+    low_high_graph["low", "to", "low_9x"].edge_index = edges_low_vertical_low_to_9x.swapaxes(0,1)
+    low_high_graph["low_9x", "to", "high"].edge_index = edges_low_vertical_9x_to_high.swapaxes(0,1)
 
 #    #-- LAPLACIAN EIGENVECTORS --#
 #

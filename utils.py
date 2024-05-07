@@ -38,7 +38,7 @@ def use_gpu_if_possible():
 ######################################################
 
 
-def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr):
+def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr, mask_land=None):
     r'''
     Derives a new version of the longitude, latitude and precipitation
     tensors, by only retaining the values inside the specified lon-lat rectangle
@@ -56,12 +56,19 @@ def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr):
     lat_sel = lat[bool_both]
     z_sel = z[bool_both]
     pr_sel = pr[:,bool_both]
-    return lon_sel, lat_sel, z_sel, pr_sel
+    if mask_land is None:
+        return lon_sel, lat_sel, z_sel, pr_sel, None
+    else:
+        mask_land = mask_land[bool_both]
+        return lon_sel, lat_sel, z_sel, pr_sel, mask_land
 
 
-def retain_valid_nodes(lon, lat, pr, z):
+def retain_valid_nodes(lon, lat, pr, z, mask_land=None):
 
-    valid_nodes = ~torch.isnan(pr).all(dim=0)
+    if mask_land is None:
+        valid_nodes = ~torch.isnan(pr).all(dim=0)
+    else:
+        valid_nodes = ~torch.isnan(mask_land)
     lon = lon[valid_nodes]
     lat = lat[valid_nodes]
     pr = pr[:,valid_nodes] 
@@ -315,122 +322,99 @@ class quantized_loss():
     bins:   array cntaining the bin number for each of the nodes
     '''
     def __init__(self):
-        self.mse_loss = nn.MSELoss()
-        self.gamma = 1
-        # self.w = torch.tensor([0.        , 0.97314211, 0.98550669, 0.98867791, 0.99070504,
-        #                     0.99217012, 0.99331872, 0.9942339 , 0.99501228, 0.99569069,
-        #                     0.99629964, 0.9968411 , 0.99732297, 0.99775423, 0.99812667,
-        #                     0.99845558, 0.99874281, 0.99898771, 0.99920216, 0.9993808 ,
-        #                     0.99952715, 0.99964406, 0.99973279, 0.99979955, 0.99984979,
-        #                     0.99988813, 0.99991655, 0.99993842, 0.99995466, 0.9999677 ,
-        #                     0.99997718, 0.99998426, 0.99998911, 0.99999282, 0.99999528,
-        #                     0.99999693, 0.99999793, 0.99999866, 0.99999909, 0.99999937,
-        #                     0.99999956, 0.99999968, 0.99999977, 0.99999983, 0.99999987,
-        #                     0.9999999 , 0.99999993, 0.99999995, 0.99999997, 0.99999999])
+        self.mse_loss = nn.MSELoss(reduction='mean')
+        self.alpha = 0.005
 
-        # self.w = torch.tensor([0.        , 0.23986506, 0.53060533, 0.57122705, 0.61302775,
-        #                         0.67614517, 0.69597921, 0.72391865, 0.74754971, 0.76440881,
-        #                         0.78548478, 0.79851332, 0.81427415, 0.82624273, 0.83837927,
-        #                         0.84972993, 0.85968978, 0.86968089, 0.87895801, 0.88769771,
-        #                         0.89589746, 0.90379577, 0.91112076, 0.91828936, 0.92493525,
-        #                         0.93118279, 0.93700937, 0.94236466, 0.94743576, 0.95224705,
-        #                         0.95677888, 0.9609333 , 0.96476712, 0.96833488, 0.97174368,
-        #                         0.97491694, 0.97773601, 0.98039223, 0.98273215, 0.98490067,
-        #                         0.9868026 , 0.98856462, 0.99003911, 0.99136291, 0.99249696,
-        #                         0.99350548, 0.9943257 , 0.99507764, 0.99574782, 0.9963224 ,
-        #                         0.99681511, 0.99722419, 0.99762647, 0.99794052, 0.9982412 ,
-        #                         0.99846454, 0.99869109, 0.99890058, 0.99906662, 0.99921134,
-        #                         0.99933734, 0.99944613, 0.99954329, 0.99961771, 0.9996794 ,
-        #                         0.99974081, 0.99978494, 0.99982973, 0.99985965, 0.9998868 ,
-        #                         0.99990736, 0.99992468, 0.99993866, 0.99994849, 0.99995898,
-        #                         0.99996711, 0.99997322, 0.99997683, 0.99998012, 0.99998348,
-        #                         0.99998536, 0.99998966, 0.99998952, 0.99999216, 0.99999299,
-        #                         0.99999292, 0.99999461, 0.99999552, 0.99999548, 0.99999675,
-        #                         0.99999664, 0.99999776, 0.9999978 , 0.99999798, 0.99999834,
-        #                         0.99999845, 0.99999895, 0.99999935, 0.99999967, 0.99999982])
+        w_class1_100 = torch.tensor([0.0        , 0.23986506, 0.53060533, 0.57122705, 0.61302775,
+                            0.67614517, 0.69597921, 0.72391865, 0.74754971, 0.76440881,
+                            0.78548478, 0.79851332, 0.81427415, 0.82624273, 0.83837927,
+                            0.84972993, 0.85968978, 0.86968089, 0.87895801, 0.88769771,
+                            0.89589746, 0.90379577, 0.91112076, 0.91828936, 0.92493525,
+                            0.93118279, 0.93700937, 0.94236466, 0.94743576, 0.95224705,
+                            0.95677888, 0.9609333 , 0.96476712, 0.96833488, 0.97174368,
+                            0.97491694, 0.97773601, 0.98039223, 0.98273215, 0.98490067,
+                            0.9868026 , 0.98856462, 0.99003911, 0.99136291, 0.99249696,
+                            0.99350548, 0.9943257 , 0.99507764, 0.99574782, 0.9963224 ,
+                            0.99681511, 0.99722419, 0.99762647, 0.99794052, 0.9982412 ,
+                            0.99846454, 0.99869109, 0.99890058, 0.99906662, 0.99921134,
+                            0.99933734, 0.99944613, 0.99954329, 0.99961771, 0.9996794 ,
+                            0.99974081, 0.99978494, 0.99982973, 0.99985965, 0.9998868 ,
+                            0.99990736, 0.99992468, 0.99993866, 0.99994849, 0.99995898,
+                            0.99996711, 0.99997322, 0.99997683, 0.99998012, 0.99998348,
+                            0.99998536, 0.99998966, 0.99998952, 0.99999216, 0.99999299,
+                            0.99999292, 0.99999461, 0.99999552, 0.99999548, 0.99999675,
+                            0.99999664, 0.99999776, 0.9999978 , 0.99999798, 0.99999834,
+                            0.99999845, 0.99999895, 0.99999935, 0.99999967, 0.99999982])
         
-        self.w = torch.tensor([ 0.        , 0.99642002, 0.98426235, 0.98878362, 0.99238034,
-                            0.99307446, 0.99390994, 0.99472743, 0.9950033 , 0.99566846,
-                            0.99590287, 0.99623921, 0.99651671, 0.9967781 , 0.99697434,
-                            0.99723892, 0.99739957, 0.99759485, 0.99775992, 0.99791533,
-                            0.99806807, 0.99821832, 0.9983513 , 0.99847849, 0.99859873,
-                            0.99871466, 0.99882233, 0.99892386, 0.99901531, 0.99910465,
-                            0.99918669, 0.99926336, 0.99933623, 0.99940208, 0.99946314,
-                            0.99952095, 0.99957535, 0.99962395, 0.99966931, 0.99970927,
-                            0.99974675, 0.99977871, 0.99980896, 0.99983382, 0.99985627,
-                            0.99987556, 0.99989255, 0.99990629, 0.99991901, 0.99993024,
-                            0.99993977, 0.99994795, 0.9999549 , 0.99996135, 0.99996669,
-                            0.99997151, 0.99997533, 0.99997917, 0.99998247, 0.99998511,
-                            0.99998759, 0.99998951, 0.99999137, 0.99999283, 0.99999403,
-                            0.99999504, 0.99999606, 0.99999673, 0.99999742, 0.99999785,
-                            0.99999831, 0.99999861, 0.99999885, 0.99999907, 0.99999925,
-                            0.99999941, 0.9999995 , 0.99999959, 0.99999967, 0.9999997 ,
-                            0.99999974, 0.99999982, 0.99999982, 0.99999986, 0.99999988,
-                            0.99999988, 0.9999999 , 0.99999992, 0.99999992, 0.99999995,
-                            0.99999995, 0.99999996, 0.99999996, 0.99999997, 0.99999997,
+        w_all_100 = torch.tensor([0.0        , 0.97944841, 0.9839962 , 0.98859393, 0.99225148,
+                            0.99295734, 0.99380695, 0.99463827, 0.9949188 , 0.99559521,
+                            0.99583359, 0.99617562, 0.9964578 , 0.99672362, 0.99692317,
+                            0.99719223, 0.9973556 , 0.99755417, 0.99772204, 0.99788008,
+                            0.9980354 , 0.99818819, 0.99832342, 0.99845276, 0.99857503,
+                            0.99869292, 0.99880242, 0.99890566, 0.99899866, 0.99908951,
+                            0.99917294, 0.99925090, 0.99932501, 0.99939197, 0.99945406,
+                            0.99951285, 0.99956817, 0.99961759, 0.99966372, 0.99970436,
+                            0.99974246, 0.99977497, 0.99980573, 0.99983101, 0.99985384,
+                            0.99987346, 0.99989073, 0.99990470, 0.99991764, 0.99992906,
+                            0.99993876, 0.99994707, 0.99995414, 0.99996069, 0.99996612,
+                            0.99997103, 0.99997491, 0.99997881, 0.99998217, 0.99998486,
+                            0.99998738, 0.99998933, 0.99999123, 0.99999271, 0.99999393,
+                            0.99999496, 0.99999600, 0.99999667, 0.99999737, 0.99999781,
+                            0.99999828, 0.99999859, 0.99999883, 0.99999906, 0.99999923,
+                            0.9999994 , 0.99999949, 0.99999958, 0.99999966, 0.99999969,
+                            0.99999974, 0.99999982, 0.99999981, 0.99999986, 0.99999988,
+                            0.99999988, 0.99999990, 0.99999992, 0.99999992, 0.99999994,
+                            0.99999994, 0.99999996, 0.99999996, 0.99999996, 0.99999997,
                             0.99999997, 0.99999998, 0.99999999, 0.99999999, 1.        ])
+        
+        self.w = w_all_100
     
     def __call__(self, prediction_batch, target_batch, bins, device):
+        # loss_quantized = torch.zeros((bins.shape)).to(device)
         loss_quantized = 0
         self.w = self.w.to(device)
         bins = bins.int()
+        loss_mse = self.mse_loss(prediction_batch, target_batch)
+        loss_mae = torch.abs(prediction_batch - target_batch)
         for b in torch.unique(bins):
             mask_b = bins == b
             omega = mask_b.sum()
-            loss_quantized += 1/omega * self.w[b]**self.gamma * (torch.abs(prediction_batch * mask_b - target_batch * mask_b))
-        loss_mse = self.mse_loss(prediction_batch, target_batch) 
-        return loss_mse + 250 * torch.mean(loss_quantized)
-        #return torch.mean(loss_quantized)
+            loss_quantized += torch.mean(1/omega * self.w[b] * loss_mae[mask_b])
+            # loss_quantized += torch.mean(1/omega * self.w[b] * loss_mse[mask_b])
+        return loss_mse, self.alpha * loss_quantized
     
-class quantized_focal_loss():
-    '''
-    w:      weight, computed as 1-h, where h is normalized histogram of
-            a given input data x considering B bins the normalization is
-            obtained by dividing the bins by the maximum bin count observed for x
-    bins:   array cntaining the bin number for each of the nodes
-    '''
-    def __init__(self):
-        self.focal_loss = sigmoid_focal_loss
-        self.w = torch.tensor([ 0.        , 0.99642002, 0.98426235, 0.98878362, 0.99238034,
-                            0.99307446, 0.99390994, 0.99472743, 0.9950033 , 0.99566846,
-                            0.99590287, 0.99623921, 0.99651671, 0.9967781 , 0.99697434,
-                            0.99723892, 0.99739957, 0.99759485, 0.99775992, 0.99791533,
-                            0.99806807, 0.99821832, 0.9983513 , 0.99847849, 0.99859873,
-                            0.99871466, 0.99882233, 0.99892386, 0.99901531, 0.99910465,
-                            0.99918669, 0.99926336, 0.99933623, 0.99940208, 0.99946314,
-                            0.99952095, 0.99957535, 0.99962395, 0.99966931, 0.99970927,
-                            0.99974675, 0.99977871, 0.99980896, 0.99983382, 0.99985627,
-                            0.99987556, 0.99989255, 0.99990629, 0.99991901, 0.99993024,
-                            0.99993977, 0.99994795, 0.9999549 , 0.99996135, 0.99996669,
-                            0.99997151, 0.99997533, 0.99997917, 0.99998247, 0.99998511,
-                            0.99998759, 0.99998951, 0.99999137, 0.99999283, 0.99999403,
-                            0.99999504, 0.99999606, 0.99999673, 0.99999742, 0.99999785,
-                            0.99999831, 0.99999861, 0.99999885, 0.99999907, 0.99999925,
-                            0.99999941, 0.9999995 , 0.99999959, 0.99999967, 0.9999997 ,
-                            0.99999974, 0.99999982, 0.99999982, 0.99999986, 0.99999988,
-                            0.99999988, 0.9999999 , 0.99999992, 0.99999992, 0.99999995,
-                            0.99999995, 0.99999996, 0.99999996, 0.99999997, 0.99999997,
-                            0.99999997, 0.99999998, 0.99999999, 0.99999999, 1.        ])
-    
-    def __call__(self, prediction_batch, target_batch, bins, device):
-        loss_quantized = 0
-        self.w = self.w.to(device)
-        bins = bins.int()
-        for b in torch.unique(bins):
-            mask_b = bins == b
-            omega = mask_b.sum()
-            loss_quantized += 1/omega * self.focal_loss(prediction_batch * mask_b, target_batch * mask_b, alpha=-1,gamma=2, reduction='none')
-        #return loss_quantized
-        return torch.mean(loss_quantized)
-    
-
-
 def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, threshold=np.log1p(1)):
     mask_low = ground_truth <= threshold
     loss_low = mask_low * torch.max(q_low*(ground_truth-predictions), (1-q_low)*(predictions-ground_truth))
     loss_high = ~mask_low * torch.max(q_high*(ground_truth-predictions), (1-q_high)*(predictions-ground_truth))
-    #loss_mse = nn.functional.mse_loss(predictions, ground_truth) 
+    #loss_mse = nn.functional.mse_loss(predictions, ground_truth)
     return torch.mean(loss_low + loss_high)
+
+def ghm_c_loss(y_pred, y_true, bins=10):
+   # Compute gradient norm 
+   probs = torch.sigmoid(y_pred)
+   gradient_norm = torch.abs(probs - y_true)
+   
+   # Bin the gradients
+   min_val, max_val = gradient_norm.min(), gradient_norm.max()
+   bin_width = (max_val - min_val) / bins
+   gradient_bins = torch.floor((gradient_norm - min_val) / bin_width).long()
+   
+  # Calculate gradient density
+   bin_counts = torch.bincount(gradient_bins)
+   total_count = bin_counts.sum()
+   gradient_density = bin_counts / total_count
+  
+  # Get bin id for each example
+   # bin_ids = gradient_bins[torch.arange(len(gradient_norm)), gradient_norm]
+
+  # Compute loss 
+   weights = 1 / (gradient_density[gradient_bins] + 1e-6)
+   ce_loss = nn.functional.binary_cross_entropy_with_logits(y_pred, y_true)
+   weighted_loss = ce_loss * weights
+ 
+   return weighted_loss.mean()
+
 
 #-----------------------------------------------------
 #-------------------- LOAD CHECKPOINT ----------------
@@ -481,7 +465,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 class Trainer(object):
 
     def train_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
-                        epoch_start, alpha=0.75, gamma=2):
+                        epoch_start, alpha=0.9, gamma=2):
         
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -511,7 +495,8 @@ class Trainer(object):
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                loss = loss_fn(y_pred, y)
+#                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
 #                w = graph['high'].w[train_mask]
 #                loss = loss_fn(y_pred, y, w, accelerator.device)
                 accelerator.backward(loss)
@@ -551,7 +536,8 @@ class Trainer(object):
 
                     y_pred = model(graph).squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
-                    loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                    loss = loss_fn(y_pred, y)
+#                    loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
 #                    w = graph['high'].w[train_mask]
 #                    loss = loss_fn(y_pred, y, w)
                     acc = accuracy_binary_one(y_pred, y)
@@ -578,9 +564,11 @@ class Trainer(object):
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
             loss_meter = AverageMeter()
-            #rmse_loss_meter = AverageMeter()
+            loss_mse_meter = AverageMeter()
+            loss_q_meter = AverageMeter()
             loss_meter_val = AverageMeter()
-            #rmse_loss_meter_val = AverageMeter()
+            loss_mse_meter_val = AverageMeter()
+            loss_q_meter_val = AverageMeter()
             
             start = time.time()
 
@@ -591,19 +579,22 @@ class Trainer(object):
                 y = graph['high'].y[train_mask]
                 #loss = loss_fn(y_pred, y)
                 w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w, accelerator.device)
+                # loss = loss_fn(y_pred, y, w, accelerator.device)
+                loss_mse, loss_q = loss_fn(y_pred, y, w, accelerator.device)
+                loss = loss_mse + loss_q
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
                 #loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                #rmse_loss_meter.update(val=loss_rmse.item(), n=1)    
-                #accelerator.log({'epoch':epoch, 'RMSE loss iteration': rmse_loss_meter.val, 'RMSE loss avg': rmse_loss_meter.avg})
+                loss_mse_meter.update(val=loss_mse.item(), n=1)    
+                loss_q_meter.update(val=loss_q.item(), n=1)    
+                accelerator.log({'MSE loss iteration': loss_mse_meter.val, 'MSE loss avg': loss_mse_meter.avg, 'Q loss iteration': loss_q_meter.val, 'Q loss avg': loss_q_meter.avg})
                 
             end = time.time()
             accelerator.log({'loss epoch': loss_meter.avg})
-            #accelerator.log({'RMSE loss epoch': rmse_loss_meter.avg})
+            accelerator.log({'MSE loss epoch': loss_mse_meter.avg, 'Q loss epoch': loss_q_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
@@ -625,13 +616,16 @@ class Trainer(object):
                     y = graph['high'].y[train_mask]
                     #loss = loss_fn(y_pred, y)
                     w = graph['high'].w[train_mask]
-                    loss = loss_fn(y_pred, y, w, accelerator.device)
+                    # loss = loss_fn(y_pred, y, w, accelerator.device)
+                    loss_mse, loss_q = loss_fn(y_pred, y, w, accelerator.device)
+                    loss = loss_mse + loss_q
                     loss_meter_val.update(val=loss.item(), n=1)    
                     #loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                    #rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
+                    loss_mse_meter_val.update(val=loss_mse.item(), n=1)    
+                    loss_q_meter_val.update(val=loss_q.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
-            #accelerator.log({'validation RMSE loss': rmse_loss_meter_val.avg})
+            accelerator.log({'validation MSE loss': loss_mse_meter_val.avg, 'validation Q loss': loss_q_meter_val.avg})
         return model
     
 

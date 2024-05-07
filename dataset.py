@@ -60,7 +60,7 @@ class Dataset_Graph(Dataset):
     def _get_features(self, time_index: int):
         time_index_x = time_index
         #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
-        x_low = self.graph['low'].x[:,time_index_x-24:time_index_x+1:6,:]
+        x_low = self.graph['low'].x[:,time_index_x-24:time_index_x+1:6,:] # var,time,level ?? nodes, time, var, level
         x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low
     
@@ -108,17 +108,18 @@ class Dataset_Graph(Dataset):
 
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
 
-        snapshot['low_9x', 'within', 'low_9x'].edge_index = self.graph['low_9x', 'within', 'low_9x'].edge_index
-        snapshot['low_25x', 'within', 'low_25x'].edge_index = self.graph['low_25x', 'within', 'low_25x'].edge_index
-        snapshot['low', 'to', 'low_9x'].edge_index = self.graph['low', 'to', 'low_9x'].edge_index
-        snapshot['low_9x', 'to', 'low_25x'].edge_index = self.graph['low_9x', 'to', 'low_25x'].edge_index
-        snapshot['low_25x', 'to', 'high'].edge_index = self.graph['low_25x', 'to', 'high'].edge_index
-        snapshot['low_9x'].x = self.graph['low_9x'].x 
-        snapshot['low_25x'].x = self.graph['low_25x'].x 
+#        snapshot['low_9x', 'within', 'low_9x'].edge_index = self.graph['low_9x', 'within', 'low_9x'].edge_index
+#        snapshot['low_25x', 'within', 'low_25x'].edge_index = self.graph['low_25x', 'within', 'low_25x'].edge_index
+#        snapshot['low', 'to', 'low_9x'].edge_index = self.graph['low', 'to', 'low_9x'].edge_index
+#        snapshot['low_9x', 'to', 'low_25x'].edge_index = self.graph['low_9x', 'to', 'low_25x'].edge_index
+#        snapshot['low_25x', 'to', 'high'].edge_index = self.graph['low_25x', 'to', 'high'].edge_index
+#        snapshot['low_9x'].x = self.graph['low_9x'].x 
+#        snapshot['low_25x'].x = self.graph['low_25x'].x 
 
         snapshot['low'].x = x_low 
         #snapshot['high'].x_empty = self.graph['high'].x
-        snapshot['high'].x = self.graph['high'].x #torch.zeros((snapshot['high'].num_nodes,1))
+        # snapshot['high'].x = self.graph['high'].x #torch.zeros((snapshot['high'].num_nodes,1))
+        snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
 
         snapshot['high'].lon = self.graph['high'].lon
@@ -404,6 +405,100 @@ class Dataset_Graph_CNN_GNN(Dataset):
 
         return snapshot
     
+
+class Dataset_Graph_CNN_GNN_new(Dataset):
+
+    def __init__(
+        self,
+        graph: Graph,
+        targets: Targets,
+        **kwargs: Additional_Features
+    ):
+        self.graph = graph
+        self.targets = targets
+        self.additional_feature_keys = []
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            self.additional_feature_keys.append(key)
+        self._check_temporal_consistency()
+        #self._add_node_degree()
+
+    def __len__(self):
+        #return len(self.features)
+        return self.graph['low'].x.shape[2]
+        
+    def _check_temporal_consistency(self):
+        if self.targets is not None:
+            assert (self.graph['low'].x.shape[2]) == self.targets.shape[1], f"Temporal dimension inconsistency, input has shape {self.graph['low'].x.shape}, target has shape {self.targets.shape}."
+
+    def _set_snapshot_count(self):
+        self.snapshot_count = len(self)
+    
+    def _get_high_nodes_degree(self, snapshot):
+        node_degree = (degree(snapshot['high','within','high'].edge_index[0], snapshot['high'].num_nodes) / 8).unsqueeze(-1)
+        return node_degree
+
+    def _get_features(self, time_index: int):
+        x_low = self.graph['low'].x[:,:,time_index-24:time_index+1,:] # nodes,var,time,level
+        return x_low
+    
+    def _get_target(self, time_index: int):
+        return self.targets[:,time_index]
+
+    def _get_train_mask(self, target: torch.tensor):
+        return ~torch.isnan(target)
+    
+    def _get_additional_feature(self, time_index: int, feature_key: str):
+        feature = getattr(self, feature_key)[:,time_index]
+        return feature
+    
+    def _get_additional_features(self, time_index: int):
+        additional_features = {
+            key: self._get_additional_feature(time_index, key)
+            for key in self.additional_feature_keys
+        }
+        return additional_features
+    
+    def __getitem__(self, time_index: int):
+        x_low = self._get_features(time_index)
+        y = self._get_target(time_index) if self.targets is not None else None
+        train_mask = self._get_train_mask(y) if y is not None else None
+
+        additional_features = self._get_additional_features(time_index)
+
+        snapshot = HeteroData()
+
+        for key, value in additional_features.items():
+            if value.shape[0] == self.graph['high'].x.shape[0]:
+                snapshot['high'][key] = value
+            elif value.shape[0] == self.graph['low'].x.shape[0]:
+                snapshot['high'][key] = value
+       
+        snapshot['high'].y = y
+        snapshot['high'].train_mask = train_mask
+        snapshot.num_nodes = self.graph.num_nodes
+        snapshot['high'].num_nodes = self.graph['high'].num_nodes
+        snapshot['low'].num_nodes = self.graph['low'].num_nodes
+
+        snapshot.t = time_index
+
+        snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
+        snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+
+        snapshot['low'].x = x_low 
+        snapshot['high'].x = self.graph['high'].x
+        snapshot['high'].z_std = self.graph['high'].z_std
+
+        snapshot['high'].lon = self.graph['high'].lon
+        snapshot['high'].lat = self.graph['high'].lat
+        snapshot['low'].lon = self.graph['low'].lon
+        snapshot['low'].lat = self.graph['low'].lat
+
+        snapshot['low', 'to', 'low_9x'].edge_index = self.graph['low', 'to', 'low_9x'].edge_index
+        snapshot['low_9x', 'to', 'high'].edge_index = self.graph['low_9x', 'to', 'high'].edge_index
+        snapshot['low_9x'].x = self.graph['low_9x'].x
+
+        return snapshot
     
 
 class Dataset_Graph_t(Dataset_Graph):

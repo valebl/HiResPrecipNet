@@ -77,18 +77,26 @@ if __name__ == '__main__':
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year_input)
     
-    #test_start_idx = max(24, test_start_idx-24)
+    #correction for start idxs
+    if test_start_idx >= 24:
+        test_start_idx = test_start_idx-24
+        test_start_idx_input = test_start_idx_input-24
+    else:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"\ntest_start_idx={test_start_idx} < 24, thus testing will start from idx {test_start_idx+24}")
 
-    with open(args.input_path+"pr_gripho.pkl", 'rb') as f:
-        pr_gripho = pickle.load(f)
+    with open(args.input_path+"pr_target.pkl", 'rb') as f:
+        pr_target = pickle.load(f)
 
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
 
-    pr_gripho = pr_gripho[:,test_start_idx:test_end_idx]
+    pr_target = pr_target[:,test_start_idx:test_end_idx]
 
     if args.dataset_name == "Dataset_Graph_CNN_GNN":
         low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,test_start_idx_input:test_end_idx_input]    
+    elif args.dataset_name == "Dataset_Graph_CNN_GNN_new":
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,test_start_idx_input:test_end_idx_input,:] # nodes, var, time, lev
     else:
         low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input:test_end_idx_input,:]    
 
@@ -153,15 +161,16 @@ if __name__ == '__main__':
     pr_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,-1)[:,indices]
 
     data = HeteroData()
-    data.pr_gripho = pr_gripho[:,24:] # No predictions for the first 24 hours (since we use the 24h before to make a prediction)
-    data.pr_cl = pr_cl
-    data.pr_reg = pr_reg
-    data.pr = pr_cl * pr_reg
-    data.times = times
-    data["low"].lat = low_high_graph["low"].lat
-    data["low"].lon = low_high_graph["low"].lon
-    data["high"].lat = low_high_graph["high"].lat
-    data["high"].lon = low_high_graph["high"].lon
+    data.pr_target = pr_target[:,24:].cpu().numpy() # No predictions for the first 24 hours (since we use the 24h before to make a prediction)
+    data.pr_cl = pr_cl.cpu().numpy()
+    data.pr_reg = pr_reg.cpu().numpy()
+    data.pr = pr_cl.cpu().numpy() * pr_reg.cpu().numpy()
+    data.times = times.cpu().numpy()
+    data["low"].lat = low_high_graph["low"].lat.cpu().numpy()
+    data["low"].lon = low_high_graph["low"].lon.cpu().numpy()
+    data["high"].lat = low_high_graph["high"].lat.cpu().numpy()
+    data["high"].lon = low_high_graph["high"].lon.cpu().numpy()
+    data["high", "within", "high"].edge_index = low_high_graph["high","within","high"].edge_index.cpu().numpy()
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
@@ -170,7 +179,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.output_file, 'wb') as f:
-            pickle.dump(data.cpu(), f)
+            pickle.dump(data, f)
 
     
 

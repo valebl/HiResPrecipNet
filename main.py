@@ -131,6 +131,8 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'quantized_focal_loss':
         loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'ghm_c_loss':
+        loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'threshold_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)
     else:
@@ -156,11 +158,12 @@ if __name__ == '__main__':
 
     # Define input and target
     if args.dataset_name == "Dataset_Graph_CNN_GNN":
-        low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # 0, 140256
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # nodes, var, lev, time
+    elif args.dataset_name == "Dataset_Graph_CNN_GNN_new":
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # nodes, var, time, lev
     else:
-        low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # 0, 140256
+        low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # nodes, time, var*lev
     target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # 0, 140256
-
 
     # Define a mask to ignore time indexes with all nan values
     mask_not_all_nan = [torch.tensor(True) for i in range(24)]

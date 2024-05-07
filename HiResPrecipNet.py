@@ -45,6 +45,47 @@ class HiResPrecipNet(nn.Module):
         y_pred = self.predictor(encod_high)
         return y_pred
     
+class HiResPrecipNet2(nn.Module):
+    
+    def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
+        super(HiResPrecipNet2, self).__init__()
+
+        self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.5, heads=1, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.5, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.5, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.5, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.5, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Dropout(p=0.5),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):        
+        encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+
     
 class HiResPrecipNet_9x_25x(nn.Module):
     
@@ -778,33 +819,23 @@ class HiResPrecipNet_CNN_GNN_new(nn.Module):
         self.nvars = nvars
         self.nlevels = nlevels
 
-        self.node_encoder_cnn_temporal = nn.Sequential(
-            nn.Conv3d(1,8, kernel_size=(1,5,1), padding=0),
+        self.node_encoder_cnn = nn.Sequential(
+            nn.Conv3d(1,8, kernel_size=(1,5,3), padding=(0,0,1)),
             nn.BatchNorm3d(8),
             nn.ReLU(),
-            nn.Conv3d(8,16, kernel_size=(1,5,1), padding=0),
+            nn.Conv3d(8,16, kernel_size=(1,5,3), padding=(0,0,1)),
             nn.BatchNorm3d(16),
             nn.ReLU(),
-            nn.Conv3d(16,32, kernel_size=(1,5,1), padding=0),
+            nn.Conv3d(16,32, kernel_size=(1,5,3), padding=(0,0,1)),
             nn.BatchNorm3d(32),
             nn.ReLU(),
-            nn.Conv3d(32,16, kernel_size=(1,5,1), padding=0),
-            nn.BatchNorm3d(16),
+            nn.Conv3d(32,64, kernel_size=(1,5,3), padding=(0,0,1)),
+            nn.BatchNorm3d(64),
             nn.ReLU(),
-            nn.Conv3d(16,8, kernel_size=(1,5,1), padding=0),
-            nn.BatchNorm3d(8),
+            nn.Conv3d(64,32, kernel_size=(1,5,3), padding=0),
+            nn.BatchNorm3d(32),
             nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(1,5,1), padding=0, stride=(1,2,1))                    
-        )
-
-        self.node_encoder_cnn_vertical = nn.Sequential(
-            nn.Conv3d(8,16, kernel_size=(1,1,3), padding=(0,0,1)),
-            nn.BatchNorm3d(16),
-            nn.ReLU(),
-            nn.Conv3d(16,node_encod_dim, kernel_size=(1,1,3), padding=0),
-            nn.BatchNorm3d(node_encod_dim),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(1,1,3), padding=0, stride=(1,1,2))                    
+            nn.MaxPool3d(kernel_size=(1,5,3), padding=0, stride=(1,2,1))                    
         )
 
         self.dense = nn.Sequential(
@@ -841,8 +872,7 @@ class HiResPrecipNet_CNN_GNN_new(nn.Module):
             )
 
     def forward(self, data): # [N,V,L,T] (num_nodes,vars=5,times=25,levels=5)
-        encod_low = self.node_encoder_cnn_temporal(data.x_dict['low'].unsqueeze(1)) # from [N,1,V,T,L] to [N,8,V,1,L]
-        encod_low = self.node_encoder_cnn_vertical(encod_low) # from [N,8,V,1,L] to [N,32,V,1,1]
+        encod_low = self.node_encoder_cnn(data.x_dict['low'].unsqueeze(1)) # from [N,1,V,T,L] to [N,8,V,1,1]
         encod_low = self.dense(encod_low.squeeze().flatten(start_dim=1)) # from 32*5=160 to 32
         encod_low2high  = self.downscaler((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
         encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)

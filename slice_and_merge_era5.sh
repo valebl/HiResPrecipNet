@@ -9,15 +9,15 @@ INPUT_PATH_PHASE_1=$6
 OUTPUT_PATH_PHASE_1=$7
 PREFIX=$8
 
-lon_min_era5=$(echo $LON_MIN-3\*$INTERVAL | bc)
-lon_max_era5=$(echo $LON_MAX+3\*$INTERVAL | bc)
-lat_min_era5=$(echo $LAT_MIN-3\*$INTERVAL | bc)
-lat_max_era5=$(echo $LAT_MAX+3\*$INTERVAL | bc)
+lon_min_=$(echo $LON_MIN-3\*$INTERVAL | bc)
+lon_max_=$(echo $LON_MAX+3\*$INTERVAL | bc)
+lat_min_=$(echo $LAT_MIN-3\*$INTERVAL | bc)
+lat_max_=$(echo $LAT_MAX+3\*$INTERVAL | bc)
 
-echo $lon_min_era5
-echo $lon_max_era5
-echo $lat_min_era5
-echo $lat_max_era5
+echo $lon_min_
+echo $lon_max_
+echo $lat_min_
+echo $lat_max_
 
 cd ${INPUT_PATH_PHASE_1}
 
@@ -25,7 +25,7 @@ cd ${INPUT_PATH_PHASE_1}
 for v in 'q' 't' 'u' 'v' 'z' ; do
 	files=$(ls "${v}_"*".nc")
 	for file in $files ; do
-		cdo sellonlatbox,$lon_min_era5,$lon_max_era5,$lat_min_era5,$lat_max_era5 "${INPUT_PATH_PHASE_1}${file}" "${OUTPUT_PATH_PHASE_1}${PREFIX}${file}"
+		cdo sellonlatbox,$lon_min_,$lon_max_,$lat_min_,$lat_max_ "${INPUT_PATH_PHASE_1}${file}" "${OUTPUT_PATH_PHASE_1}${PREFIX}${file}"
 	done
 done
 
