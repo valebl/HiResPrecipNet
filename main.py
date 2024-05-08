@@ -131,6 +131,8 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'quantized_focal_loss':
         loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'mse_theta':
+        loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'ghm_c_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'threshold_quantile_loss':
