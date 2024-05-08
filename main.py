@@ -133,6 +133,8 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'mse_theta':
         loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'gamma_nll':
+        loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'ghm_c_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'threshold_quantile_loss':
@@ -306,7 +308,11 @@ if __name__ == '__main__':
     if args.model_type == "cl":
         model = trainer.train_cl(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
     elif args.model_type == "reg":
-        model = trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)       
+        model = trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)     
+    elif args.model_type == "reg_theta":
+        model = trainer.train_reg_theta(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
+    elif args.model_type == "train_reg_gamma":
+        model = trainer.train_reg_gamma(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
         
     end = time.time()
 

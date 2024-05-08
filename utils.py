@@ -323,6 +323,12 @@ class mse_theta():
         return torch.mean(loss_mse/prediction_theta_batch)
     
 
+class gamma_nll():
+
+    def __call__(self, alpha_batch, beta_batch, target_batch):
+        return - torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch)
+
+
 class quantized_loss():
     '''
     w:      weight, computed as 1-h, where h is normalized histogram of
@@ -637,6 +643,64 @@ class Trainer(object):
             accelerator.log({'validation MSE loss': loss_mse_meter_val.avg, 'validation Q loss': loss_q_meter_val.avg})
         return model
     
+    def train_reg_gamma(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
+        
+        #mse_loss = nn.MSELoss()
+        if accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write(f"\nStart training the regressor.")
+        for epoch in range(epoch_start, epoch_start+args.epochs):
+            model.train()
+            if accelerator.is_main_process:
+                with open(args.output_path+args.log_file, 'a') as f:
+                    f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
+            loss_meter = AverageMeter()
+            loss_meter_val = AverageMeter()
+            
+            start = time.time()
+
+            for graph in dataloader_train:
+                train_mask = graph['high'].train_mask
+                optimizer.zero_grad()
+                theta_pred = model(graph)
+                alpha_pred = theta_pred[:,0].squeeze()[train_mask]
+                beta_pred = theta_pred[:,1].squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
+                loss = loss_fn(alpha_pred, beta_pred, theta_pred, y)
+                accelerator.backward(loss)
+                accelerator.clip_grad_norm_(model.parameters(), 5)
+                optimizer.step()
+                loss_meter.update(val=loss.item(), n=1)    
+                accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
+                
+            end = time.time()
+            accelerator.log({'loss epoch': loss_meter.avg})
+            if accelerator.is_main_process:
+                with open(args.output_path+args.log_file, 'a') as f:
+                    f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
+            
+            if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
+                lr_scheduler.step()
+            
+            accelerator.save_state(output_dir=args.output_path+f"checkpoint_{epoch}/")
+            torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
+            
+            model.eval()
+            # Perform validation step
+            with torch.no_grad():
+                for graph in dataloader_val:
+                    
+                    train_mask = graph["high"].train_mask
+                    theta_pred = model(graph)
+                    alpha_pred = theta_pred[:,0].squeeze()[train_mask]
+                    beta_pred = theta_pred[:,1].squeeze()[train_mask]
+                    y = graph['high'].y[train_mask]
+                    loss = loss_fn(alpha_pred, beta_pred, theta_pred, y)
+                    loss_meter_val.update(val=loss.item(), n=1)    
+
+            accelerator.log({'validation loss': loss_meter_val.avg})
+        return model
+    
     def train_reg_theta(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         
         #mse_loss = nn.MSELoss()
@@ -656,7 +720,9 @@ class Trainer(object):
             for graph in dataloader_train:
                 train_mask = graph['high'].train_mask
                 optimizer.zero_grad()
-                y_pred, theta_pred = model(graph).squeeze()[train_mask]
+                y_pred, theta_pred = model(graph)
+                y_pred = y_pred.squeeze()[train_mask]
+                theta_pred = theta_pred.squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 loss = loss_fn(y_pred, theta_pred, y)
                 accelerator.backward(loss)
@@ -683,8 +749,9 @@ class Trainer(object):
                 for graph in dataloader_val:
                     
                     train_mask = graph["high"].train_mask
-
-                    y_pred, theta_pred = model(graph).squeeze()[train_mask]
+                    y_pred, theta_pred = model(graph)
+                    y_pred = y_pred.squeeze()[train_mask]
+                    theta_pred = theta_pred.squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
                     loss = loss_fn(y_pred, theta_pred, y)
                     loss_meter_val.update(val=loss.item(), n=1)    
