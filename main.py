@@ -311,7 +311,7 @@ if __name__ == '__main__':
         model = trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)     
     elif args.model_type == "reg_theta":
         model = trainer.train_reg_theta(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
-    elif args.model_type == "train_reg_gamma":
+    elif args.model_type == "reg_gamma":
         model = trainer.train_reg_gamma(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
         
     end = time.time()
