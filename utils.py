@@ -666,7 +666,7 @@ class Trainer(object):
                 alpha_pred = theta_pred[:,0].squeeze()[train_mask]
                 beta_pred = theta_pred[:,1].squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(alpha_pred, beta_pred, theta_pred, y)
+                loss = loss_fn(alpha_pred, beta_pred, y)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
@@ -695,7 +695,7 @@ class Trainer(object):
                     alpha_pred = theta_pred[:,0].squeeze()[train_mask]
                     beta_pred = theta_pred[:,1].squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
-                    loss = loss_fn(alpha_pred, beta_pred, theta_pred, y)
+                    loss = loss_fn(alpha_pred, beta_pred, y)
                     loss_meter_val.update(val=loss.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
