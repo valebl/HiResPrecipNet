@@ -1,9 +1,89 @@
 import torch.nn as nn
 import torch_geometric.nn as geometric_nn
-from torch_geometric.nn import GATv2Conv, HeteroConv
+from torch_geometric.nn import GATv2Conv, HeteroConv, GCNConv
 from torch_geometric.nn import global_mean_pool
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch_geometric.data import Batch
+from torch_geometric_temporal.nn.recurrent import A3TGCN
+
+############################
+### Current stable model ###
+############################
+
+class HiResPrecipNet(nn.Module):
+    
+    def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
+        super(HiResPrecipNet, self).__init__()
+
+        self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):        
+        encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+
+
+class HiResPrecipNet_small2(nn.Module):
+    
+    def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
+        super(HiResPrecipNet_small2, self).__init__()
+
+        self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):        
+        encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+    
 
 class HiResPrecipNet_variance(nn.Module):
     
@@ -82,12 +162,21 @@ class HiResPrecipNet_gamma(nn.Module):
             nn.ReLU(),
             ])
     
-        self.predictor = nn.Sequential(
+        self.predictor_alpha = nn.Sequential(
             nn.Linear(high_out, high_out),
             nn.ReLU(),
             nn.Linear(high_out, 32),
             nn.ReLU(),
-            nn.Linear(32, 2),
+            nn.Linear(32, 1),
+            nn.Softplus()
+            )
+        
+        self.predictor_beta = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
             nn.Softplus()
             )
 
@@ -95,14 +184,65 @@ class HiResPrecipNet_gamma(nn.Module):
         encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].x), data.edge_index_dict[('low','to','high')])
         encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
         encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
-        theta_pred = self.predictor(encod_high)
-        return theta_pred
+        alpha_pred = self.predictor_alpha(encod_high)
+        beta_pred = self.predictor_beta(encod_high)
+        return alpha_pred, beta_pred # alpha, beta
     
 
-class HiResPrecipNet(nn.Module):
+class HiResPrecipNet_gauss(nn.Module):
     
     def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
-        super(HiResPrecipNet, self).__init__()
+        super(HiResPrecipNet_gauss, self).__init__()
+
+        self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor_mu = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            )
+        
+        self.predictor_log_sigma = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            )
+
+    def forward(self, data):        
+        encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        mu_pred = self.predictor_mu(encod_high)
+        log_sigma_pred = self.predictor_log_sigma(encod_high)
+        return mu_pred, log_sigma_pred   
+
+
+class HiResPrecipNet_evl(nn.Module):
+    
+    def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
+        super(HiResPrecipNet_evl, self).__init__()
 
         self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
         
@@ -131,13 +271,23 @@ class HiResPrecipNet(nn.Module):
             nn.ReLU(),
             nn.Linear(32, 1)
             )
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
 
     def forward(self, data):        
         encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].x), data.edge_index_dict[('low','to','high')])
         encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
         encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
         y_pred = self.predictor(encod_high)
-        return y_pred
+        y_pred_cl = self.classifier(encod_high)
+        return y_pred, y_pred_cl
+    
     
 class HiResPrecipNet2(nn.Module):
     
@@ -1174,3 +1324,300 @@ class HiResPrecipNet_CNN_GNN_9x_up_new(nn.Module):
         encod_high = self.processor(encod_low2high, data.edge_index_dict[('high','within','high')])
         y_pred = self.predictor(encod_high)
         return y_pred
+
+
+################################
+### Separate variables model ###
+#############################ù##
+
+class HiResPrecipNet_subpixel(nn.Module):
+    
+    def __init__(self, low_in=5*5, high_in=1, low2high_out=5*5, high_out=64, c_in=5, r=3):
+        super(HiResPrecipNet_subpixel, self).__init__()
+
+        self.node_upscaler_cnn = nn.Sequential(
+            nn.Conv2d(c_in,64,5,1,2),
+            nn.Tanh(),
+            nn.Conv2d(64,32,3,1,1),
+            nn.Tanh(),
+            nn.Conv2d(32,c_in*(r*r),3,1,1),
+            nn.PixelShuffle(r),
+            nn.Sigmoid()
+        )
+
+        self.downscaler = GATv2Conv((5*5*5, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):
+        for g in data:
+            x_upscaled = self.node_upscaler_cnn(g['low'].x)
+            x_upscaled = x_upscaled.reshape(5,5,x_upscaled.shape[1],x_upscaled.shape[2],x_upscaled.shape[3])
+            g['low_9x'].x = torch.permute(x_upscaled, (3,4,0,1,2)).flatten(end_dim=1).flatten(start_dim=1)
+        data = Batch.from_data_list(data)
+        encod_low2high  = self.downscaler((data.x_dict['low_9x'], data['high'].x), data.edge_index_dict[('low_9x','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+
+
+class HiResPrecipNet_temporal(nn.Module):
+    
+    def __init__(self, low_in=5*5, high_in=1, low2high_out=16, high_out=16, periods=25):
+        super(HiResPrecipNet_temporal, self).__init__()
+
+        self.tgnn = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=low_in, out_channels=low_in, periods=periods),  'x, edge_index -> x'),
+            ])
+        
+        self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.2, heads=4, aggr='mean', concat=False, add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.BatchNorm1d(high_out),
+            nn.Linear(high_out, 8),
+            nn.ReLU(),
+            nn.BatchNorm1d(8),
+            nn.Linear(8, 1)
+            )
+
+    def forward(self, data):
+        encod_low = self.tgnn(data['low'].x, data['low', 'within', 'low'].edge_index)
+        encod_low2high  = self.downscaler((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+
+class HiResPrecipNet_temporal_5(nn.Module):
+    
+    def __init__(self, low_in=5*5, high_in=1, low2high_out=16, high_out=16, periods=25):
+        super(HiResPrecipNet_temporal, self).__init__()
+
+        self.tgnn_q = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=low_in, out_channels=low_in, periods=periods),  'x, edge_index -> x'),
+            ])
+        
+        self.tgnn_t = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=low_in, out_channels=low_in, periods=periods),  'x, edge_index -> x'),
+            ])
+        
+        self.tgnn_u = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=low_in, out_channels=low_in, periods=periods),  'x, edge_index -> x'),
+            ])
+        
+        self.tgnn_v = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=low_in, out_channels=low_in, periods=periods),  'x, edge_index -> x'),
+            ])
+        
+        self.tgnn_z = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=low_in, out_channels=low_in, periods=periods),  'x, edge_index -> x'),
+            ])
+        
+        self.downscaler = GATv2Conv((low_in, high_in), out_channels=low2high_out, dropout=0.2, heads=4, aggr='mean', concat=False, add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.BatchNorm1d(high_out),
+            nn.Linear(high_out, 8),
+            nn.ReLU(),
+            nn.BatchNorm1d(8),
+            nn.Linear(8, 1)
+            )
+
+    def forward(self, data):
+        encod_low_q = self.tgnn(data['low'].x[:,:,0,:], data['low', 'within', 'low'].edge_index)
+        encod_low_t = self.tgnn(data['low'].x[:,:,1,:], data['low', 'within', 'low'].edge_index)
+        encod_low_u = self.tgnn(data['low'].x[:,:,2,:], data['low', 'within', 'low'].edge_index)
+        encod_low_v = self.tgnn(data['low'].x[:,:,3,:], data['low', 'within', 'low'].edge_index)
+        encod_low_z = self.tgnn(data['low'].x[:,:,4,:], data['low', 'within', 'low'].edge_index)
+        encod_low  = torch.cat((encod_low_q, encod_low_t, encod_low_u, encod_low_v, encod_low_z),dim=-1)
+        encod_low2high  = self.downscaler((encod_low, data['high'].x), data.edge_index_dict[('low','to','high')])
+        encod_low2high  = torch.cat((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+    
+
+class HiResPrecipNet_superres(nn.Module):
+    
+    def __init__(self, high_in=1, low2high_out=5*5, high_out=64, c_in=5*5, r=5):
+        super(HiResPrecipNet_superres, self).__init__()
+
+        self.pixel_shuffle = nn.PixelShuffle(r)
+
+        self.downscale_q = GCNConv(c_in,c_in*(r*r))
+
+        self.downscale_t = GCNConv(c_in,c_in*(r*r))
+
+        self.downscale_u = GCNConv(c_in,c_in*(r*r))
+
+        self.downscale_v = GCNConv(c_in,c_in*(r*r))
+
+        self.downscale_z = GCNConv(c_in,c_in*(r*r))
+
+        self.to_high = GATv2Conv((5*5*5, high_in), out_channels=low2high_out, dropout=0.4, heads=4, concat=False, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):
+        # perform downscaling similarly to sub-pixel convolution + pixel shuffle
+        data['low'].x = data['low'].x.flatten(start_dim=2)
+        encod_low_q = self.pixel_shuffle(self.downscale_q(data['low'].x[:,0,:], data['low', 'within', 'low'].edge_index).unsqueeze(1).unsqueeze(-1).unsqueeze(-1)).flatten(start_dim=3)
+        encod_low_t = self.pixel_shuffle(self.downscale_t(data['low'].x[:,1,:], data['low', 'within', 'low'].edge_index).unsqueeze(1).unsqueeze(-1).unsqueeze(-1)).flatten(start_dim=3)
+        encod_low_u = self.pixel_shuffle(self.downscale_u(data['low'].x[:,2,:], data['low', 'within', 'low'].edge_index).unsqueeze(1).unsqueeze(-1).unsqueeze(-1)).flatten(start_dim=3)
+        encod_low_v = self.pixel_shuffle(self.downscale_v(data['low'].x[:,3,:], data['low', 'within', 'low'].edge_index).unsqueeze(1).unsqueeze(-1).unsqueeze(-1)).flatten(start_dim=3)
+        encod_low_z = self.pixel_shuffle(self.downscale_z(data['low'].x[:,4,:], data['low', 'within', 'low'].edge_index).unsqueeze(1).unsqueeze(-1).unsqueeze(-1)).flatten(start_dim=3)
+        encod_low_q = torch.permute(encod_low_q, (0,3,1,2)).flatten(end_dim=1).flatten(start_dim=1)
+        encod_low_t = torch.permute(encod_low_t, (0,3,1,2)).flatten(end_dim=1).flatten(start_dim=1)
+        encod_low_u = torch.permute(encod_low_u, (0,3,1,2)).flatten(end_dim=1).flatten(start_dim=1)
+        encod_low_v = torch.permute(encod_low_v, (0,3,1,2)).flatten(end_dim=1).flatten(start_dim=1)
+        encod_low_z = torch.permute(encod_low_z, (0,3,1,2)).flatten(end_dim=1).flatten(start_dim=1)
+        # concat the downscaled encodings
+        encod_low  = torch.cat((encod_low_q, encod_low_t, encod_low_u, encod_low_v, encod_low_z),dim=-1)
+        encod_low2high  = self.to_high((encod_low, data['high'].z_std), data.edge_index_dict[('low_25x','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+
+
+class HiResPrecipNet_temporal_superres(nn.Module):
+    
+    def __init__(self, high_in=1, low2high_out=5*5, high_out=64, c_in=5*5, r=5, periods=25):
+        super(HiResPrecipNet_temporal_superres, self).__init__()
+
+        self.pixel_shuffle = nn.PixelShuffle(r)
+
+        self.tgnn = geometric_nn.Sequential('x, edge_index', [
+            (A3TGCN(in_channels=c_in, out_channels=c_in*(r*r), periods=periods),  'x, edge_index -> x'),
+            ])
+
+        self.to_high = GATv2Conv((5*5, high_in), out_channels=low2high_out, dropout=0.4, heads=4, concat=False, aggr='mean', add_self_loops=False, bias=True)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low2high_out+1), 'x -> x'),
+            (GATv2Conv(in_channels=low2high_out+1, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=high_out*2, out_channels=high_out, heads=1, dropout=0.0, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):
+        encod_low = self.tgnn(data['low'].x, data['low', 'within', 'low'].edge_index) # num_nodes, time, var*level
+        # perform downscaling similarly to sub-pixel convolution + pixel shuffle
+        encod_low = encod_low.flatten(start_dim=1).unsqueeze(-1).unsqueeze(-1)                     # (num_nodes,1*var*level*r*r,1,1)
+        encod_low = self.pixel_shuffle(encod_low)                                                  # (num_nodes,1*var*lev,r,r)
+        encod_low = torch.permute(encod_low, (0,2,3,1)).flatten(end_dim=2).flatten(start_dim=1)    # (num_nodes*r*r,time*var*lev)
+        encod_low2high  = self.to_high((encod_low, data['high'].z_std), data.edge_index_dict[('low_25x','to','high')])
+        encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
+        encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred = self.predictor(encod_high)
+        return y_pred
+
+
