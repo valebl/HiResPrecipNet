@@ -326,7 +326,7 @@ class mse_theta():
 class gamma_nll():
 
     def __call__(self, alpha_batch, beta_batch, target_batch):
-        return - torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch)
+        return torch.mean(- torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch))
 
 
 class quantized_loss():
