@@ -340,6 +340,7 @@ class gamma_nll():
         return torch.mean(- torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch))
         #return -torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch)
 
+
 class EVL_loss():
 
     def __init__(self):
@@ -1117,6 +1118,50 @@ class Tester(object):
         times = torch.stack(times)
 
         return pr_cl, pr_reg, times
+
+    def test_encod(self, model_cl, model_reg, dataloader,low_high_graph, args, accelerator=None):
+        model_cl.eval()
+        model_reg.eval()
+        step = 0 
+
+        pr_cl = []
+        pr_reg = []
+        times = []
+        encod_cl = []
+        encod_reg = []
+        
+        with torch.no_grad():    
+            for graph in dataloader:
+                # graph = Batch.from_data_list(data)
+                t = graph.t
+                times.append(t)
+                
+                # Regressor
+                y_pred_reg, encod_pred_reg = model_reg(graph)
+                pr_reg.append(torch.expm1(y_pred_reg)) 
+                encod_reg.append(encod_pred_reg)
+                #pr_reg.append(y_pred_reg)
+
+                # Classifier
+                y_pred_cl, encod_pred_cl = model_cl(graph)
+                #-- sigmoid focal loss ->
+                pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
+                #pr_cl.append(y_pred_cl)
+                encod_cl.append(encod_pred_cl)
+                
+                if step % 100 == 0:
+                    if accelerator is None or accelerator.is_main_process:
+                        with open(args.output_path+args.log_file, 'a') as f:
+                            f.write(f"\nStep {step} done.")
+                step += 1 
+
+        pr_cl = torch.stack(pr_cl)
+        pr_reg = torch.stack(pr_reg)
+        times = torch.stack(times)
+        encod_cl = torch.stack(encod_pred_cl)
+        encod_reg = torch.stack(encod_pred_reg)
+
+        return pr_cl, pr_reg, times, encod_cl, encod_reg
 
 #-----------------------------------------------------
 #-------------------- VALIDATION ---------------------
