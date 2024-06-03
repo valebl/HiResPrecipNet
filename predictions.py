@@ -35,6 +35,7 @@ parser.add_argument('--model_cl', type=str, default=None)
 parser.add_argument('--model_reg', type=str, default=None) 
 parser.add_argument('--model_combined', type=str, default=None)
 parser.add_argument('--dataset_name', type=str, default=None) 
+parser.add_argument('--collate_name', type=str, default=None) 
 
 #-- start and end training dates
 parser.add_argument('--test_year_start', type=int)
@@ -97,13 +98,15 @@ if __name__ == '__main__':
         low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,test_start_idx_input:test_end_idx_input]    
     elif args.dataset_name == "Dataset_Graph_CNN_GNN_new":
         low_high_graph['low'].x = low_high_graph['low'].x[:,:,test_start_idx_input:test_end_idx_input,:] # nodes, var, time, lev
+    elif args.dataset_name == "Dataset_Graph_subpixel": # or args.dataset_name == "Dataset_StaticGraphTemporalSignal":
+        low_high_graph['low'].x = low_high_graph['low'].x[test_start_idx_input:test_end_idx_input,:,:,:,:]
     else:
         low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input:test_end_idx_input,:]    
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     dataset_graph = Dataset_Graph(targets=None, graph=low_high_graph)
     
-    custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
+    custom_collate_fn = getattr(dataset, args.collate_name)
         
     sampler_graph = Iterable_Graph(dataset_graph=dataset_graph, shuffle=False)
         
