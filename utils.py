@@ -19,6 +19,8 @@ from torch.autograd import Variable
 
 from torchvision.ops import sigmoid_focal_loss
 
+from torch_geometric.data import Batch
+
 ######################################################
 #------------------ GENERAL UTILITIES ---------------
 ######################################################
@@ -323,11 +325,36 @@ class mse_theta():
         return torch.mean(loss_mse/prediction_theta_batch)
     
 
+
+class gauss_nll():
+
+    def __call__(self, mu_batch, log_sigma_batch, target_batch):
+        sigma_batch = torch.exp(log_sigma_batch) # undo the log
+        return torch.mean(2*log_sigma_batch + ((target_batch-mu_batch)/sigma_batch)**2)
+        #return - torch.mean(torch.log(1/(sigma_batch*torch.sqrt(torch.tensor(2*torch.pi)))*torch.exp(-(target_batch-mu_batch)**2 / (2*sigma_batch**2))))
+
+
 class gamma_nll():
 
     def __call__(self, alpha_batch, beta_batch, target_batch):
-        return - torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch)
+        return -torch.mean(alpha_batch*torch.log(beta_batch) - torch.lgamma(alpha_batch) + (alpha_batch-1)*torch.log(target_batch) - beta_batch*target_batch)
 
+
+class EVL_loss():
+
+    def __init__(self):
+        self.beta0 = 0.9
+        self.beta1 = 0.1
+        self.gamma = 2
+        self.eps = 1e-6
+
+    def __call__(self, prediction_batch, target_batch, device):
+        ut = nn.functional.sigmoid(prediction_batch)
+        vt = target_batch
+        eps = torch.tensor(self.eps).to(device)
+        evl_loss = - self.beta0 * (1 - ut/self.gamma)**self.gamma * vt * torch.log(torch.max(eps, ut)) - self.beta1 * (1 - (1-ut)/self.gamma)**self.gamma * (1-vt) * torch.log(torch.max(eps, 1-ut))
+        #print(ut.shape, vt.shape, evl_loss.shape, '\n', f'pred_y = {prediction_batch.min(), prediction_batch.max()}', f'ut = {ut.min(), ut.max()}', f'vt = {vt.min(), vt.max()}', f'evl_loss = {evl_loss.min(), evl_loss.max()}')
+        return torch.mean(evl_loss)
 
 class quantized_loss():
     '''
@@ -338,7 +365,7 @@ class quantized_loss():
     '''
     def __init__(self):
         self.mse_loss = nn.MSELoss(reduction='mean')
-        self.alpha = 0.005
+        self.alpha = 0.001
 
         w_class1_100 = torch.tensor([0.0        , 0.23986506, 0.53060533, 0.57122705, 0.61302775,
                             0.67614517, 0.69597921, 0.72391865, 0.74754971, 0.76440881,
@@ -381,11 +408,13 @@ class quantized_loss():
                             0.99999988, 0.99999990, 0.99999992, 0.99999992, 0.99999994,
                             0.99999994, 0.99999996, 0.99999996, 0.99999996, 0.99999997,
                             0.99999997, 0.99999998, 0.99999999, 0.99999999, 1.        ])
+
+        w_all_12 = torch.tensor([0.        , 0.92247552, 0.97560553, 0.98999604, 0.99738314,
+                            0.999108  , 0.99944022, 0.99983917, 0.99991586, 0.99997766, 0.99999634])
         
         self.w = w_all_100
     
     def __call__(self, prediction_batch, target_batch, bins, device):
-        # loss_quantized = torch.zeros((bins.shape)).to(device)
         loss_quantized = 0
         self.w = self.w.to(device)
         bins = bins.int()
@@ -394,8 +423,7 @@ class quantized_loss():
         for b in torch.unique(bins):
             mask_b = bins == b
             omega = mask_b.sum()
-            loss_quantized += torch.mean(1/omega * self.w[b] * loss_mae[mask_b])
-            # loss_quantized += torch.mean(1/omega * self.w[b] * loss_mse[mask_b])
+            loss_quantized += torch.mean(1/omega * torch.sum(self.w[b] * loss_mae[mask_b]))
         return loss_mse, self.alpha * loss_quantized
     
 def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, threshold=np.log1p(1)):
@@ -480,7 +508,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 class Trainer(object):
 
     def train_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
-                        epoch_start, alpha=0.9, gamma=2):
+                        epoch_start, alpha=0.75, gamma=2):
         
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -505,13 +533,14 @@ class Trainer(object):
             start = time.time()
 
             for graph in dataloader_train:
+                #graph = Batch.from_data_list(data)
                 train_mask = graph["high"].train_mask
                 optimizer.zero_grad()
 
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y)
-#                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                # loss = loss_fn(y_pred, y, accelerator.device)
+                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
 #                w = graph['high'].w[train_mask]
 #                loss = loss_fn(y_pred, y, w, accelerator.device)
                 accelerator.backward(loss)
@@ -546,13 +575,12 @@ class Trainer(object):
             # Perform validation step
             with torch.no_grad():
                 for graph in dataloader_val:
-                    
+                    # graph = Batch.from_data_list(data)
                     train_mask = graph["high"].train_mask
-
                     y_pred = model(graph).squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
-                    loss = loss_fn(y_pred, y)
-#                    loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
+                    # loss = loss_fn(y_pred, y, accelerator.device)
+                    loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
 #                    w = graph['high'].w[train_mask]
 #                    loss = loss_fn(y_pred, y, w)
                     acc = accuracy_binary_one(y_pred, y)
@@ -588,13 +616,75 @@ class Trainer(object):
             start = time.time()
 
             for graph in dataloader_train:
+                # graph = Batch.from_data_list(data)
+                train_mask = graph['high'].train_mask
+                optimizer.zero_grad()
+                y_pred = model(graph).squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
+                w = graph['high'].w[train_mask]
+                loss = loss_fn(y_pred, y, w)
+                accelerator.backward(loss)
+                accelerator.clip_grad_norm_(model.parameters(), 5)
+                optimizer.step()
+                loss_meter.update(val=loss.item(), n=1)    
+                accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
+                
+            end = time.time()
+            accelerator.log({'loss epoch': loss_meter.avg})
+            if accelerator.is_main_process:
+                with open(args.output_path+args.log_file, 'a') as f:
+                    f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
+
+            if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
+                lr_scheduler.step()
+            
+            accelerator.save_state(output_dir=args.output_path+f"checkpoint_{epoch}/")
+            torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
+            
+            model.eval()
+            # Perform validation step
+            with torch.no_grad():
+                for graph in dataloader_val:
+                    # graph = Batch.from_data_list(data)
+                    train_mask = graph["high"].train_mask
+                    y_pred = model(graph).squeeze()[train_mask]
+                    y = graph['high'].y[train_mask]
+                    w = graph['high'].w[train_mask]
+                    loss = loss_fn(y_pred, y, w)
+                    loss_meter_val.update(val=loss.item(), n=1)    
+
+            accelerator.log({'validation loss': loss_meter_val.avg})
+        return model
+
+    def train_reg_quantized(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
+        
+        #mse_loss = nn.MSELoss()
+        if accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write(f"\nStart training the regressor.")
+        for epoch in range(epoch_start, epoch_start+args.epochs):
+            model.train()
+            if accelerator.is_main_process:
+                with open(args.output_path+args.log_file, 'a') as f:
+                    f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
+            loss_meter = AverageMeter()
+            loss_mse_meter = AverageMeter()
+            loss_q_meter = AverageMeter()
+            loss_meter_val = AverageMeter()
+            loss_mse_meter_val = AverageMeter()
+            loss_q_meter_val = AverageMeter()
+            
+            start = time.time()
+
+            for graph in dataloader_train:
+                # graph = Batch.from_data_list(data)
                 train_mask = graph['high'].train_mask
                 optimizer.zero_grad()
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 #loss = loss_fn(y_pred, y)
                 w = graph['high'].w[train_mask]
-                # loss = loss_fn(y_pred, y, w, accelerator.device)
+                #loss = loss_fn(y_pred, y, w)
                 loss_mse, loss_q = loss_fn(y_pred, y, w, accelerator.device)
                 loss = loss_mse + loss_q
                 accelerator.backward(loss)
@@ -609,7 +699,7 @@ class Trainer(object):
                 
             end = time.time()
             accelerator.log({'loss epoch': loss_meter.avg})
-            accelerator.log({'MSE loss epoch': loss_mse_meter.avg, 'Q loss epoch': loss_q_meter.avg})
+            # accelerator.log({'MSE loss epoch': loss_mse_meter.avg, 'Q loss epoch': loss_q_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
@@ -624,14 +714,13 @@ class Trainer(object):
             # Perform validation step
             with torch.no_grad():
                 for graph in dataloader_val:
-                    
+                    # graph = Batch.from_data_list(data)
                     train_mask = graph["high"].train_mask
-
                     y_pred = model(graph).squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
-                    #loss = loss_fn(y_pred, y)
+                    # loss = loss_fn(y_pred, y)
                     w = graph['high'].w[train_mask]
-                    # loss = loss_fn(y_pred, y, w, accelerator.device)
+                    # loss = loss_fn(y_pred, y, w)
                     loss_mse, loss_q = loss_fn(y_pred, y, w, accelerator.device)
                     loss = loss_mse + loss_q
                     loss_meter_val.update(val=loss.item(), n=1)    
@@ -643,6 +732,110 @@ class Trainer(object):
             accelerator.log({'validation MSE loss': loss_mse_meter_val.avg, 'validation Q loss': loss_q_meter_val.avg})
         return model
     
+    def train_reg_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
+                        epoch_start):
+        
+        loss_fn_cl = EVL_loss()
+        alpha = 1
+        
+        if accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write(f"\nStart training the classifier.")
+        for epoch in range(epoch_start, epoch_start+args.epochs):
+            model.train()
+            if accelerator.is_main_process:
+                with open(args.output_path+args.log_file, 'a') as f:
+                    f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
+
+            # Define objects to track meters
+            # -> Train
+            loss_meter = AverageMeter()
+            loss_reg_meter = AverageMeter()
+            acc_meter = AverageMeter()
+            acc_class0_meter = AverageMeter()
+            acc_class1_meter = AverageMeter()
+            # -> Validation
+            loss_meter_val = AverageMeter()
+            loss_reg_meter_val = AverageMeter()
+            acc_meter_val = AverageMeter()
+            acc_class0_meter_val = AverageMeter()
+            acc_class1_meter_val = AverageMeter()
+            start = time.time()
+
+            for graph in dataloader_train:
+                train_mask = graph["high"].train_mask
+                optimizer.zero_grad()
+
+                y_pred, y_pred_cl = model(graph)
+                y_pred = y_pred.squeeze()[train_mask]
+                y_pred_cl = y_pred_cl.squeeze()[train_mask]
+                y = graph['high'].y[train_mask]
+                y_cl = torch.where(y >= 0.1, 1, 0).float().to(accelerator.device)
+                loss_reg = loss_fn(y_pred, y)
+                loss_cl = loss_fn_cl(y_pred_cl, y_cl, accelerator.device)
+                loss = loss_reg + alpha * loss_cl
+                accelerator.backward(loss)
+                accelerator.clip_grad_norm_(model.parameters(), 5)
+                optimizer.step()
+                loss_meter.update(val=loss.item(), n=1)
+                acc = accuracy_binary_one(y_pred_cl, y_cl)
+                acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred_cl, y_cl)
+                loss_reg_meter.update(val=loss_reg.item(), n=1)
+
+                acc_meter.update(val=acc, n=1)
+                acc_class0_meter.update(val=acc_class0, n=1)
+                acc_class1_meter.update(val=acc_class1, n=1)
+                accelerator.log({'epoch':epoch, 'accuracy iteration': acc_meter.val, 'loss avg': loss_meter.avg,
+                    'accuracy avg': acc_meter.avg, 'accuracy class0 avg': acc_class0_meter.avg, 'accuracy class1 avg': acc_class1_meter.avg,
+                    'loss reg avg': loss_reg_meter.avg})
+                
+            end = time.time()
+
+            # End of epoch --> write log and save checkpoint
+            accelerator.log({'loss epoch': loss_meter.avg, 'accuracy epoch': acc_meter.avg, 'accuracy class0 epoch': acc_class0_meter.avg, 'accuracy class1 epoch': acc_class1_meter.avg,
+                             'loss reg epoch': loss_reg_meter.avg})
+            if accelerator.is_main_process:
+                with open(args.output_path+args.log_file, 'a') as f:
+                    f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}; "+
+                            f"acc: {acc_meter.avg:.4f}; acc class 0: {acc_class0_meter.avg:.4f}; acc class 1: {acc_class1_meter.avg:.4f}.")
+            
+            if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
+                lr_scheduler.step()
+
+            accelerator.save_state(output_dir=args.output_path+f"checkpoint_{epoch}/")
+            torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
+            
+            model.eval()
+            # Perform validation step
+            with torch.no_grad():
+                for graph in dataloader_val:
+                    
+                    train_mask = graph["high"].train_mask
+
+                    y_pred, y_pred_cl = model(graph)
+                    y_pred = y_pred.squeeze()[train_mask]
+                    y_pred_cl = y_pred_cl.squeeze()[train_mask]
+                    y = graph['high'].y[train_mask]
+                    y_cl = torch.where(y >= 0.1, 1, 0).float().to(accelerator.device)
+                    loss_reg = loss_fn(y_pred, y)
+                    loss_cl = loss_fn_cl(y_pred_cl, y_cl, accelerator.device)
+                    loss = loss_reg + alpha * loss_cl
+                    acc = accuracy_binary_one(y_pred_cl, y_cl)
+                    acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred_cl, y_cl)   
+
+                    loss_meter_val.update(val=loss.item(), n=1)    
+                    acc_meter_val.update(val=acc, n=1)
+                    acc_class0_meter_val.update(val=acc_class0, n=1)
+                    acc_class1_meter_val.update(val=acc_class1, n=1)
+                    loss_reg_meter_val.update(val=loss_reg.item(), n=1)
+
+            
+            accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
+                                'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg,
+                                'validation loss reg': loss_reg_meter.avg})
+        return model
+
+
     def train_reg_gamma(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         
         #mse_loss = nn.MSELoss()
@@ -662,9 +855,9 @@ class Trainer(object):
             for graph in dataloader_train:
                 train_mask = graph['high'].train_mask
                 optimizer.zero_grad()
-                theta_pred = model(graph)
-                alpha_pred = theta_pred[:,0].squeeze()[train_mask]
-                beta_pred = theta_pred[:,1].squeeze()[train_mask]
+                alpha_pred, beta_pred = model(graph)
+                alpha_pred = alpha_pred.squeeze()[train_mask]
+                beta_pred = beta_pred.squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 loss = loss_fn(alpha_pred, beta_pred, y)
                 accelerator.backward(loss)
@@ -691,9 +884,9 @@ class Trainer(object):
                 for graph in dataloader_val:
                     
                     train_mask = graph["high"].train_mask
-                    theta_pred = model(graph)
-                    alpha_pred = theta_pred[:,0].squeeze()[train_mask]
-                    beta_pred = theta_pred[:,1].squeeze()[train_mask]
+                    alpha_pred, beta_pred = model(graph)
+                    alpha_pred = alpha_pred.squeeze()[train_mask]
+                    beta_pred = beta_pred.squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
                     loss = loss_fn(alpha_pred, beta_pred, y)
                     loss_meter_val.update(val=loss.item(), n=1)    
@@ -701,8 +894,9 @@ class Trainer(object):
             accelerator.log({'validation loss': loss_meter_val.avg})
         return model
     
-    def train_reg_theta(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
+    def train_reg_gauss(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         
+        loss_fn = gauss_nll()
         #mse_loss = nn.MSELoss()
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -720,11 +914,11 @@ class Trainer(object):
             for graph in dataloader_train:
                 train_mask = graph['high'].train_mask
                 optimizer.zero_grad()
-                y_pred, theta_pred = model(graph)
-                y_pred = y_pred.squeeze()[train_mask]
-                theta_pred = theta_pred.squeeze()[train_mask]
+                mu_pred, log_sigma_pred = model(graph)
+                mu_pred = mu_pred.squeeze()[train_mask]
+                log_sigma_pred = log_sigma_pred.squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, theta_pred, y)
+                loss = loss_fn(mu_pred, log_sigma_pred, y)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
@@ -746,14 +940,13 @@ class Trainer(object):
             model.eval()
             # Perform validation step
             with torch.no_grad():
-                for graph in dataloader_val:
-                    
+                for graph in dataloader_val: 
                     train_mask = graph["high"].train_mask
-                    y_pred, theta_pred = model(graph)
-                    y_pred = y_pred.squeeze()[train_mask]
-                    theta_pred = theta_pred.squeeze()[train_mask]
+                    mu_pred, log_sigma_pred = model(graph)
+                    mu_pred = mu_pred.squeeze()[train_mask]
+                    log_sigma_pred = log_sigma_pred.squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
-                    loss = loss_fn(y_pred, theta_pred, y)
+                    loss = loss_fn(mu_pred, log_sigma_pred, y)
                     loss_meter_val.update(val=loss.item(), n=1)    
 
             accelerator.log({'validation loss': loss_meter_val.avg})
@@ -777,7 +970,7 @@ class Tester(object):
         times = []
         with torch.no_grad():    
             for graph in dataloader:
-
+                # graph = Batch.from_data_list(data)
                 t = graph.t
                 times.append(t)
                 
@@ -789,7 +982,8 @@ class Tester(object):
                 # Classifier
                 y_pred_cl = model_cl(graph)
                 #-- sigmoid focal loss ->
-                pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
+                #pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
+                pr_cl.append(y_pred_cl)
                 
                 if step % 100 == 0:
                     if accelerator is None or accelerator.is_main_process:
@@ -856,6 +1050,73 @@ class Tester(object):
 
         return pr_reg, times
     
+    def test_gamma(self, model_cl, model_reg, dataloader,low_high_graph, args, accelerator=None):
+        model_cl.eval()
+        model_reg.eval()
+        step = 0 
+
+        pr_cl = []
+        pr_reg = []
+        times = []
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                t = graph.t
+                times.append(t)
+                
+                # Regressor
+                alpha_pred, beta_pred = model_reg(graph)
+                pr_reg.append(torch.expm1(alpha_pred/beta_pred))
+
+                # Classifier
+                alpha_pred, beta_pred = model_cl(graph)
+                pr_cl.append(alpha_pred/(beta_pred**2))
+                
+                if step % 100 == 0:
+                    if accelerator is None or accelerator.is_main_process:
+                        with open(args.output_path+args.log_file, 'a') as f:
+                            f.write(f"\nStep {step} done.")
+                step += 1 
+
+        pr_cl = torch.stack(pr_cl)
+        pr_reg = torch.stack(pr_reg)
+        times = torch.stack(times)
+
+        return pr_cl, pr_reg, times
+    
+    def test_gauss(self, model_cl, model_reg, dataloader,low_high_graph, args, accelerator=None):
+        model_cl.eval()
+        model_reg.eval()
+        step = 0 
+
+        pr_cl = []
+        pr_reg = []
+        times = []
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                t = graph.t
+                times.append(t)
+                
+                # Regressor
+                y_pred, theta_pred = model_reg(graph)
+                pr_reg.append(torch.expm1(y_pred)) 
+
+                # Classifier
+                y_pred, theta_pred = model_cl(graph)
+                pr_cl.append(torch.exp(theta_pred))
+                
+                if step % 100 == 0:
+                    if accelerator is None or accelerator.is_main_process:
+                        with open(args.output_path+args.log_file, 'a') as f:
+                            f.write(f"\nStep {step} done.")
+                step += 1 
+
+        pr_cl = torch.stack(pr_cl)
+        pr_reg = torch.stack(pr_reg)
+        times = torch.stack(times)
+
+        return pr_cl, pr_reg, times
 
 #-----------------------------------------------------
 #-------------------- VALIDATION ---------------------
