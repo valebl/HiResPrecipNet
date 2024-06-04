@@ -1158,8 +1158,8 @@ class Tester(object):
         pr_cl = torch.stack(pr_cl)
         pr_reg = torch.stack(pr_reg)
         times = torch.stack(times)
-        encod_cl = torch.stack(encod_pred_cl)
-        encod_reg = torch.stack(encod_pred_reg)
+        encod_cl = torch.stack(encod_cl)
+        encod_reg = torch.stack(encod_reg)
 
         return pr_cl, pr_reg, times, encod_cl, encod_reg
 

@@ -63,6 +63,7 @@ parser.add_argument('--interval', type=float, default=0.25)
 parser.add_argument('--model_type', type=str)
 parser.add_argument('--model_name', type=str, default='HiResPrecipNet')
 parser.add_argument('--dataset_name', type=str, default='Dataset_Graph')
+parser.add_argument('--collate_name', type=str, default='custom_collate_fn')
 
 #-- start and end training dates
 parser.add_argument('--train_year_start', type=float)
@@ -135,6 +136,10 @@ if __name__ == '__main__':
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'gamma_nll':
         loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'gauss_nll':
+        loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'EVL_loss':
+        loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'ghm_c_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'threshold_quantile_loss':
@@ -165,6 +170,8 @@ if __name__ == '__main__':
         low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # nodes, var, lev, time
     elif args.dataset_name == "Dataset_Graph_CNN_GNN_new":
         low_high_graph['low'].x = low_high_graph['low'].x[:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # nodes, var, time, lev
+    elif args.dataset_name == "Dataset_Graph_subpixel": # or args.dataset_name == "Dataset_StaticGraphTemporalSignal":
+        low_high_graph['low'].x = low_high_graph['low'].x[min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:,:,:,:]
     else:
         low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # nodes, time, var*lev
     target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # 0, 140256
@@ -225,7 +232,7 @@ if __name__ == '__main__':
         dataset_graph = Dataset_Graph(targets=target_train,
             graph=low_high_graph)
 
-    custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
+    custom_collate_fn = getattr(dataset, args.collate_name)
         
     #-- split into trainset and testset
     # generator=torch.Generator().manual_seed(42)
@@ -254,7 +261,7 @@ if __name__ == '__main__':
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
 
 
 #-----------------------------------------------------
@@ -308,9 +315,13 @@ if __name__ == '__main__':
     if args.model_type == "cl":
         model = trainer.train_cl(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)
     elif args.model_type == "reg":
-        model = trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)     
-    elif args.model_type == "reg_theta":
-        model = trainer.train_reg_theta(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
+        model = trainer.train_reg(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)  
+    elif args.model_type == "reg_quantized":
+        model = trainer.train_reg_quantized(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)     
+    elif args.model_type == "reg_cl":
+        model = trainer.train_reg_cl(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)     
+    elif args.model_type == "reg_gauss":
+        model = trainer.train_reg_gauss(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
     elif args.model_type == "reg_gamma":
         model = trainer.train_reg_gamma(model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=epoch_start)    
         

@@ -131,6 +131,7 @@ class HiResPrecipNet_0502(nn.Module):
         encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].z_std), data.edge_index_dict[('low','to','high')])
         encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
         y_pred = self.predictor(encod_high)
+        return y_pred
 
 class HiResPrecipNet_GCN(nn.Module):
     

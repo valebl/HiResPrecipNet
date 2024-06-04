@@ -154,10 +154,11 @@ if __name__ == '__main__':
 #
 #    sys.exit()
     #####################################################################################
-#
+
 #    input_ds = torch.tensor(input_ds.copy())
 #    input_ds = torch.permute(input_ds, (3,4,0,1,2)) # lat, lon, time, vars, levels
 #    input_ds = torch.flatten(input_ds, end_dim=1)   # num_nodes, time, vars, levels
+#
 #    with open(args.output_path + "hierarchical_input.pkl", 'wb') as f:
 #        pickle.dump(input_ds, f)
 #
@@ -214,15 +215,16 @@ if __name__ == '__main__':
 
     input_ds_standard = torch.permute(input_ds_standard, (3,4,0,1,2)) # lat, lon, time, vars, levels
     input_ds_standard = torch.flatten(input_ds_standard, end_dim=1)   # num_nodes, time, vars, levels
+    input_ds_standard = torch.flatten(input_ds_standard, start_dim=2, end_dim=-1)
+    #input_ds_standard = torch.permute(input_ds_standard, (3,4,1,2,0)) # lat, lon, 
+    #input_ds_standard = torch.flatten(input_ds_standard, end_dim=1)   # num_nodes, vars, levels, time
 
     # New dataset, to perform "hierarchical" graph learning
-    input_ds_standard_var_lev = input_ds_standard.clone()
+    #input_ds_standard_var_lev = input_ds_standard.clone()
     
     # with open(args.output_path + "low_high_graph_hierarchical.pkl", 'wb') as f:
     #     pickle.dump(input_ds_standard_var_lev, f)
     # sys.exit()
-
-    input_ds_standard = torch.flatten(input_ds_standard, start_dim=2, end_dim=-1)
 
     with open(args.output_path + args.log_file, 'a') as f:
         f.write(f'\nPreprocessing of low resolution data finished.')
@@ -358,43 +360,49 @@ if __name__ == '__main__':
     low_high_graph = HeteroData()
     high_graph = Data()
 
-    lon_upscaled_9x = []
-    di = round(0.25 / 3,3)
+    lon_upscaled_25x = []
+    di = round(0.25 / 5,3)
 
     for lon in lon_low:
         lon_values = [lon-di,lon,lon+di,
                     lon-di,lon,lon+di,
                     lon-di,lon,lon+di]
-        _ = [lon_upscaled_9x.append(l) for l in lon_values]
+        _ = [lon_upscaled_25x.append(l) for l in lon_values]
 
-    lon_upscaled_9x = torch.stack(lon_upscaled_9x)
+    lon_upscaled_25x = torch.stack(lon_upscaled_25x)
 
-    lat_upscaled_9x = []
-    di = round(0.25 / 3,3)
+    lat_upscaled_25x = []
+    di = round(0.25 / 5,3)
 
     for lat in lat_low:
         lat_values = [lat-di,lat-di,lat-di,
                     lat, lat, lat,
                     lat+di,lat+di,lat+di]
-        _ = [lat_upscaled_9x.append(l) for l in lat_values]
+        _ = [lat_upscaled_25x.append(l) for l in lat_values]
 
-    lat_upscaled_9x = torch.stack(lat_upscaled_9x)
+    lat_upscaled_25x = torch.stack(lat_upscaled_25x)
 
     #-- EDGES --#
 
     edges_high = derive_edge_indexes_within(lon_radius=args.lon_grid_radius_high, lat_radius=args.lat_grid_radius_high,
                                   lon_n1=lon_high.double(), lat_n1=lat_high.double(), lon_n2=lon_high.double(), lat_n2=lat_high.double())
+
+    # edges_high = derive_edge_indexes_low2high(lon_n1=lon_high.double(), lat_n1=lat_high.double(),
+    #                                           lon_n2=lon_high.double(), lat_n2=lat_high.double(), n_knn=4)
     
     edges_low2high = derive_edge_indexes_low2high(lon_n1=lon_low.double(), lat_n1=lat_low.double(),
-                                  lon_n2=lon_high.double(), lat_n2=lat_high.double())
+                                  lon_n2=lon_high.double(), lat_n2=lat_high.double(), n_knn=9)
 
     edges_low_horizontal = derive_edge_indexes_within(lon_radius=0.26, lat_radius=0.26,
                                   lon_n1=lon_low.double(), lat_n1=lat_low.double(), lon_n2=lon_low.double(), lat_n2=lat_low.double())
     
-    edges_low_vertical_low_to_9x = derive_edge_indexes_low2high(lon_n1=lon_low.double(), lat_n1=lat_low.double(),
-                            lon_n2=lon_upscaled_9x.double(), lat_n2=lat_upscaled_9x.double(), n_knn=9)
+    # edges_low_horizontal = derive_edge_indexes_low2high(lon_n1=lon_low.double(), lat_n1=lat_low.double(),
+    #                                 lon_n2=lon_low.double(), lat_n2=lat_low.double(), n_knn=4)
     
-    edges_low_vertical_9x_to_high = derive_edge_indexes_low2high(lon_n1=lon_upscaled_9x.double(), lat_n1=lat_upscaled_9x.double(),
+    edges_low_vertical_low_to_25x = derive_edge_indexes_low2high(lon_n1=lon_low.double(), lat_n1=lat_low.double(),
+                            lon_n2=lon_upscaled_25x.double(), lat_n2=lat_upscaled_25x.double(), n_knn=9)
+    
+    edges_low_vertical_25x_to_high = derive_edge_indexes_low2high(lon_n1=lon_upscaled_25x.double(), lat_n1=lat_upscaled_25x.double(),
                             lon_n2=lon_high.double(), lat_n2=lat_high.double(), n_knn=9)
 
     # edges_low_vertical = derive_edge_indexes_low2high(lon_n1=lon_low, lat_n1=lat_low,
@@ -424,14 +432,14 @@ if __name__ == '__main__':
     low_high_graph['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
     low_high_graph['low', 'within', 'low'].edge_index = edges_low_horizontal.swapaxes(0,1)
 
-    low_high_graph["low_9x"].lon = lon_upscaled_9x
-    low_high_graph["low_9x"].lat = lat_upscaled_9x
-    low_high_graph["low_9x"].num_nodes = low_high_graph["low_9x"].lon.shape[0]
+    # low_high_graph["low_25x"].lon = lon_upscaled_25x
+    # low_high_graph["low_25x"].lat = lat_upscaled_25x
+    # low_high_graph["low_25x"].num_nodes = low_high_graph["low_25x"].lon.shape[0]
 
-    low_high_graph["low_9x"].x = torch.zeros((low_high_graph["low_9x"].num_nodes, 1), dtype=torch.float32)
+    # low_high_graph["low_25x"].x = torch.zeros((low_high_graph["low_25x"].num_nodes, 1), dtype=torch.float32)
 
-    low_high_graph["low", "to", "low_9x"].edge_index = edges_low_vertical_low_to_9x.swapaxes(0,1)
-    low_high_graph["low_9x", "to", "high"].edge_index = edges_low_vertical_9x_to_high.swapaxes(0,1)
+    # low_high_graph["low", "to", "low_25x"].edge_index = edges_low_vertical_low_to_25x.swapaxes(0,1)
+    # low_high_graph["low_25x", "to", "high"].edge_index = edges_low_vertical_25x_to_high.swapaxes(0,1)
 
 #    #-- LAPLACIAN EIGENVECTORS --#
 #
