@@ -63,7 +63,7 @@ parser.add_argument('--interval', type=float, default=0.25)
 parser.add_argument('--model_type', type=str)
 parser.add_argument('--model_name', type=str, default='HiResPrecipNet')
 parser.add_argument('--dataset_name', type=str, default='Dataset_Graph')
-parser.add_argument('--collate_name', type=str, default='custom_collate_fn')
+parser.add_argument('--collate_name', type=str, default='custom_collate_fn_graph')
 
 #-- start and end training dates
 parser.add_argument('--train_year_start', type=float)

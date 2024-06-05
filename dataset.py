@@ -58,9 +58,9 @@ class Dataset_Graph(Dataset):
         return node_degree
 
     def _get_features(self, time_index: int):
-        #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
-        x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:] # var,time,level ?? nodes, time, var, level
-        #x_low = self.graph['low'].x[:,time_index_x,:]
+        x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
+        #x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:] # var,time,level ?? nodes, time, var, level
+        #x_low = self.graph['low'].x[:,time_index,:]
         x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low
     
@@ -96,6 +96,7 @@ class Dataset_Graph(Dataset):
             elif value.shape[0] == self.graph['low'].x.shape[0]:
                 snapshot['high'][key] = value
        
+        #snapshot['high'].mask_high = self.graph["high"].mask_high
         snapshot['high'].y = y
         snapshot['high'].train_mask = train_mask
         snapshot.num_nodes = self.graph.num_nodes
@@ -103,7 +104,7 @@ class Dataset_Graph(Dataset):
         snapshot['low'].num_nodes = self.graph['low'].num_nodes
         snapshot.t = time_index
         
-        #snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
+        snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
 
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index

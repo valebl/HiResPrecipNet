@@ -149,8 +149,8 @@ if __name__ == '__main__':
 
     start = time.time()
 
-    # pr_cl, pr_reg, times = tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
-    pr_cl, pr_reg, times, encod_cl, encod_reg = tester.test_encod(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
+    pr_cl, pr_reg, times = tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
+    #pr_cl, pr_reg, times, encod_cl, encod_reg = tester.test_encod(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
     end = time.time()
 
     accelerator.wait_for_everyone()
@@ -176,8 +176,8 @@ if __name__ == '__main__':
     data["high"].lon = low_high_graph["high"].lon.cpu().numpy()
     data["high", "within", "high"].edge_index = low_high_graph["high","within","high"].edge_index.cpu().numpy()
 
-    data.encod_cl = encod_cl.cpu().numpy()
-    data.encod_reg = encod_reg.cpu().numpy()
+    #data.encod_cl = encod_cl.cpu().numpy()
+    #data.encod_reg = encod_reg.cpu().numpy()
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:

@@ -244,8 +244,11 @@ if __name__ == '__main__':
     gripho = xr.open_dataset(args.input_path_gripho + args.gripho_file)
     topo = xr.open_dataset(args.input_path_topo + args.topo_file)
 
-    lon = torch.tensor(gripho.lon.to_numpy())
-    lat = torch.tensor(gripho.lat.to_numpy())
+    lon = torch.tensor(gripho.longitude.to_numpy())
+    lat = torch.tensor(gripho.latitude.to_numpy())
+    lat, lon = torch.meshgrid(lat, lon)
+    #lon = torch.tensor(gripho.lon.to_numpy())
+    #lat = torch.tensor(gripho.lat.to_numpy())
     pr = torch.tensor(gripho.pr.to_numpy())
 
     if args.predictors_type == "mohc":
@@ -263,7 +266,8 @@ if __name__ == '__main__':
     write_log("\nCutting the window...", args)
 
     #-- Cut gripho and topo to the desired window --#
-    lon_high, lat_high, z_high, pr_high, mask_land = cut_window(args.lon_min, args.lon_max, args.lat_min, args.lat_max, lon, lat, z, pr, mask_land)
+    #lon_high, lat_high, z_high, pr_high, mask_land = cut_window(args.lon_min, args.lon_max, args.lat_min, args.lat_max, lon, lat, z, pr, mask_land)
+    lon_high, lat_high, z_high, pr_high, mask_land = cut_window(lon_low.min(), lon_low.max(), lat_low.min(), lat_low.max(), lon, lat, z, pr, mask_land)
 
     write_log(f"\nDone! Window is [{lon_high.min()}, {lon_high.max()}] x [{lat_high.min()}, {lat_high.max()}] with {pr_high.shape[1]} nodes.", args)
 
@@ -273,7 +277,7 @@ if __name__ == '__main__':
     # REMOVE NODES NOT IN LAND TERRITORY #
     #------------------------------------#
 
-    lon_high, lat_high, pr_high, z_high = retain_valid_nodes(lon_high, lat_high, pr_high, z_high, mask_land)
+    lon_high, lat_high, pr_high, z_high, mask_high = retain_valid_nodes(lon_high, lat_high, pr_high, z_high, mask_land)
     pr_high = pr_high.swapaxes(0,1) # (num_nodes, time)
 
     print(lon_high.shape, lat_high.shape, pr_high.shape, z_high.shape)
@@ -432,6 +436,8 @@ if __name__ == '__main__':
     low_high_graph['low', 'to', 'high'].edge_index = edges_low2high.swapaxes(0,1)
     low_high_graph['low', 'within', 'low'].edge_index = edges_low_horizontal.swapaxes(0,1)
 
+    low_high_graph['high'].mask_high = mask_high
+    
     # low_high_graph["low_25x"].lon = lon_upscaled_25x
     # low_high_graph["low_25x"].lat = lat_upscaled_25x
     # low_high_graph["low_25x"].num_nodes = low_high_graph["low_25x"].lon.shape[0]

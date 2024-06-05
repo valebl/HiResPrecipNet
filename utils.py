@@ -65,7 +65,7 @@ def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr, mask_land=No
         return lon_sel, lat_sel, z_sel, pr_sel, mask_land
 
 
-def retain_valid_nodes(lon, lat, pr, z, mask_land=None):
+def retain_valid_nodes(lon, lat, pr, z1, mask_land=None):
 
     if mask_land is None:
         valid_nodes = ~torch.isnan(pr).all(dim=0)
@@ -75,7 +75,7 @@ def retain_valid_nodes(lon, lat, pr, z, mask_land=None):
     lat = lat[valid_nodes]
     pr = pr[:,valid_nodes] 
     z = z[valid_nodes]
-    return lon, lat, pr, z
+    return lon, lat, pr, z, valid_nodes
 
 def select_nodes(lon_centre, lat_centre, lon, lat, pr, z, cell_idx, cell_idx_array, mask_1_cell_subgraphs,
         lon_lat_z_graph, pr_graph, count_points, progressive_idx, offset=0.25, offset_9=0.25):
@@ -344,8 +344,8 @@ class gamma_nll():
 class EVL_loss():
 
     def __init__(self):
-        self.beta0 = 0.9
-        self.beta1 = 0.1
+        self.beta0 = 0.95
+        self.beta1 = 0.05
         self.gamma = 2
         self.eps = 1e-6
 
@@ -619,7 +619,9 @@ class Trainer(object):
             for graph in dataloader_train:
                 # graph = Batch.from_data_list(data)
                 train_mask = graph['high'].train_mask
+                #mask_high = graph['high'].mask_high
                 optimizer.zero_grad()
+                #y_pred = model(graph).squeeze()[mask_high][train_mask]
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 w = graph['high'].w[train_mask]
@@ -648,6 +650,8 @@ class Trainer(object):
                 for graph in dataloader_val:
                     # graph = Batch.from_data_list(data)
                     train_mask = graph["high"].train_mask
+                    #mask_high = graph['high'].mask_high
+                    #y_pred = model(graph).squeeze()[mask_high][train_mask]
                     y_pred = model(graph).squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
                     w = graph['high'].w[train_mask]
@@ -737,7 +741,7 @@ class Trainer(object):
                         epoch_start):
         
         loss_fn_cl = EVL_loss()
-        alpha = 1
+        alpha = 0.5
         
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -752,12 +756,14 @@ class Trainer(object):
             # -> Train
             loss_meter = AverageMeter()
             loss_reg_meter = AverageMeter()
+            loss_cl_meter = AverageMeter()
             acc_meter = AverageMeter()
             acc_class0_meter = AverageMeter()
             acc_class1_meter = AverageMeter()
             # -> Validation
             loss_meter_val = AverageMeter()
             loss_reg_meter_val = AverageMeter()
+            loss_cl_meter_val = AverageMeter()
             acc_meter_val = AverageMeter()
             acc_class0_meter_val = AverageMeter()
             acc_class1_meter_val = AverageMeter()
@@ -771,8 +777,9 @@ class Trainer(object):
                 y_pred = y_pred.squeeze()[train_mask]
                 y_pred_cl = y_pred_cl.squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                y_cl = torch.where(y >= 0.1, 1, 0).float().to(accelerator.device)
-                loss_reg = loss_fn(y_pred, y)
+                w = graph['high'].w[train_mask]
+                y_cl = torch.where(y >= torch.log1p(torch.tensor([0.5])), 1, 0).float().to(accelerator.device)
+                loss_reg = loss_fn(y_pred, y, w)
                 loss_cl = loss_fn_cl(y_pred_cl, y_cl, accelerator.device)
                 loss = loss_reg + alpha * loss_cl
                 accelerator.backward(loss)
@@ -782,19 +789,20 @@ class Trainer(object):
                 acc = accuracy_binary_one(y_pred_cl, y_cl)
                 acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred_cl, y_cl)
                 loss_reg_meter.update(val=loss_reg.item(), n=1)
+                loss_cl_meter.update(val=loss_cl.item(), n=1)
 
                 acc_meter.update(val=acc, n=1)
                 acc_class0_meter.update(val=acc_class0, n=1)
                 acc_class1_meter.update(val=acc_class1, n=1)
                 accelerator.log({'epoch':epoch, 'accuracy iteration': acc_meter.val, 'loss avg': loss_meter.avg,
                     'accuracy avg': acc_meter.avg, 'accuracy class0 avg': acc_class0_meter.avg, 'accuracy class1 avg': acc_class1_meter.avg,
-                    'loss reg avg': loss_reg_meter.avg})
+                    'loss reg avg': loss_reg_meter.avg, 'loss cl avg': loss_cl_meter.avg})
                 
             end = time.time()
 
             # End of epoch --> write log and save checkpoint
             accelerator.log({'loss epoch': loss_meter.avg, 'accuracy epoch': acc_meter.avg, 'accuracy class0 epoch': acc_class0_meter.avg, 'accuracy class1 epoch': acc_class1_meter.avg,
-                             'loss reg epoch': loss_reg_meter.avg})
+                             'loss reg epoch': loss_reg_meter.avg, 'loss cl epoch': loss_cl_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}; "+
@@ -817,8 +825,9 @@ class Trainer(object):
                     y_pred = y_pred.squeeze()[train_mask]
                     y_pred_cl = y_pred_cl.squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
-                    y_cl = torch.where(y >= 0.1, 1, 0).float().to(accelerator.device)
-                    loss_reg = loss_fn(y_pred, y)
+                    w = graph['high'].w[train_mask]
+                    y_cl = torch.where(y >= torch.log1p(torch.tensor([0.5])), 1, 0).float().to(accelerator.device)
+                    loss_reg = loss_fn(y_pred, y, w)
                     loss_cl = loss_fn_cl(y_pred_cl, y_cl, accelerator.device)
                     loss = loss_reg + alpha * loss_cl
                     acc = accuracy_binary_one(y_pred_cl, y_cl)
@@ -829,11 +838,12 @@ class Trainer(object):
                     acc_class0_meter_val.update(val=acc_class0, n=1)
                     acc_class1_meter_val.update(val=acc_class1, n=1)
                     loss_reg_meter_val.update(val=loss_reg.item(), n=1)
+                    loss_cl_meter_val.update(val=loss_cl.item(), n=1)
 
             
             accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
                                 'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg,
-                                'validation loss reg': loss_reg_meter.avg})
+                                'validation loss reg': loss_reg_meter.avg, 'validation loss cl': loss_cl_meter.avg})
         return model
 
 

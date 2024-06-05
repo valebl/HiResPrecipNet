@@ -52,6 +52,33 @@ class HiResPrecipNet(nn.Module):
         y_pred = self.predictor(encod_high)
         return y_pred
 
+class LowResPrecipNet(nn.Module):
+    
+    def __init__(self, low_in=25*5*5, low_out=64):
+        super(LowResPrecipNet, self).__init__()
+
+        self.processor_low = geometric_nn.Sequential('x, edge_index', [
+            (geometric_nn.BatchNorm(low_in), 'x -> x'),
+            (GATv2Conv(in_channels=low_in, out_channels=low_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out*2), 'x -> x'), 
+            nn.ReLU(),
+            (GATv2Conv(in_channels=low_out*2, out_channels=low_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out*2), 'x -> x'),
+            nn.ReLU(),
+            (GATv2Conv(in_channels=low_out*2, out_channels=low_out, heads=2, dropout=0.2, aggr='mean', add_self_loops=True, bias=True),'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(low_out*2), 'x -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(low_out*2, 1),
+            )
+
+    def forward(self, data):        
+        encod = self.processor_low(data.x_dict['low'], data.edge_index_dict[('low','within','low')])
+        y_pred = self.predictor(encod)
+        return y_pred
+
 class HiResPrecipNet_encod(nn.Module):
     
     def __init__(self, low_in=5*5*5, high_in=1, low2high_out=64, high_out=64):
@@ -266,6 +293,79 @@ class HiResPrecipNet_GCN_3(nn.Module):
         y_pred = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
         #y_pred = self.predictor(y_pred)
         return y_pred
+
+class HiResPrecipNet_GCN_3_EVL(nn.Module):
+    
+    def __init__(self, low_in=25*5*5, high_in=1, low2high_out=64, high_out=32):
+        super(HiResPrecipNet_GCN_3_EVL, self).__init__()
+
+        self.downscaler = GraphConv((low_in, high_in), low2high_out)
+        
+        self.processor = geometric_nn.Sequential('x, edge_index', [
+            (GCNConv(low2high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            (geometric_nn.BatchNorm(high_out), 'x -> x'),
+            nn.ReLU(),
+            (GCNConv(high_out, high_out), 'x, edge_index -> x'),
+            nn.ReLU(),
+            ])
+    
+        self.predictor_reg = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.BatchNorm1d(high_out),
+            nn.Linear(high_out, 1)
+            )
+
+        self.predictor_cl = nn.Sequential(
+            nn.Linear(high_out, high_out),
+            nn.BatchNorm1d(high_out),
+            nn.Linear(high_out, 1)
+            )
+
+    def forward(self, data):        
+        encod_low2high  = self.downscaler((data.x_dict['low'], data['high'].z_std), data.edge_index_dict[('low','to','high')])
+        y_pred = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
+        y_pred_reg = self.predictor_reg(y_pred)
+        y_pred_cl = self.predictor_cl(y_pred)
+        return y_pred_reg, y_pred_cl
 
 
 class HiResPrecipNet_small2(nn.Module):
