@@ -741,7 +741,7 @@ class Trainer(object):
                         epoch_start):
         
         loss_fn_cl = EVL_loss()
-        alpha = 0.5
+        alpha = 10
         
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
@@ -778,7 +778,7 @@ class Trainer(object):
                 y_pred_cl = y_pred_cl.squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 w = graph['high'].w[train_mask]
-                y_cl = torch.where(y >= torch.log1p(torch.tensor([0.5])), 1, 0).float().to(accelerator.device)
+                y_cl = torch.where(y >= torch.log1p(torch.tensor([0.5])).to(accelerator.device), 1, 0).float().to(accelerator.device)
                 loss_reg = loss_fn(y_pred, y, w)
                 loss_cl = loss_fn_cl(y_pred_cl, y_cl, accelerator.device)
                 loss = loss_reg + alpha * loss_cl
@@ -826,7 +826,7 @@ class Trainer(object):
                     y_pred_cl = y_pred_cl.squeeze()[train_mask]
                     y = graph['high'].y[train_mask]
                     w = graph['high'].w[train_mask]
-                    y_cl = torch.where(y >= torch.log1p(torch.tensor([0.5])), 1, 0).float().to(accelerator.device)
+                    y_cl = torch.where(y >= torch.log1p(torch.tensor([0.5])).to(accelerator.device), 1, 0).float().to(accelerator.device)
                     loss_reg = loss_fn(y_pred, y, w)
                     loss_cl = loss_fn_cl(y_pred_cl, y_cl, accelerator.device)
                     loss = loss_reg + alpha * loss_cl
@@ -839,7 +839,6 @@ class Trainer(object):
                     acc_class1_meter_val.update(val=acc_class1, n=1)
                     loss_reg_meter_val.update(val=loss_reg.item(), n=1)
                     loss_cl_meter_val.update(val=loss_cl.item(), n=1)
-
             
             accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
                                 'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg,
@@ -1060,6 +1059,35 @@ class Tester(object):
         times = torch.stack(times)
 
         return pr_reg, times
+
+    def test_reg_cl(self, model_reg, dataloader,low_high_graph, args, accelerator=None):
+        model_reg.eval()
+        step = 0 
+        pr_reg = []
+        pr_cl = []
+        times = []
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                t = graph.t
+                times.append(t)
+                
+                # Regressor
+                y_pred_reg, y_pred_cl = model_reg(graph)
+                pr_reg.append(torch.expm1(y_pred_reg))
+                pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
+
+                if step % 100 == 0:
+                    if accelerator is None or accelerator.is_main_process:
+                        with open(args.output_path+args.log_file, 'a') as f:
+                            f.write(f"\nStep {step} done.")
+                step += 1 
+
+        pr_reg = torch.stack(pr_reg)
+        pr_cl = torch.stack(pr_cl)
+        times = torch.stack(times)
+
+        return pr_cl, pr_reg, times
     
     def test_gamma(self, model_cl, model_reg, dataloader,low_high_graph, args, accelerator=None):
         model_cl.eval()

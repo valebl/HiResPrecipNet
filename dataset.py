@@ -58,8 +58,8 @@ class Dataset_Graph(Dataset):
         return node_degree
 
     def _get_features(self, time_index: int):
-        x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
-        #x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:] # var,time,level ?? nodes, time, var, level
+        #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
+        x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:] # var,time,level ?? nodes, time, var, level
         #x_low = self.graph['low'].x[:,time_index,:]
         x_low = x_low.flatten(start_dim=1, end_dim=-1)
         return x_low

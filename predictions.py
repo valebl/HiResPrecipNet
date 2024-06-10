@@ -149,6 +149,7 @@ if __name__ == '__main__':
 
     start = time.time()
 
+    # pr_cl, pr_reg, times = tester.test_reg_cl(model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
     pr_cl, pr_reg, times = tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
     #pr_cl, pr_reg, times, encod_cl, encod_reg = tester.test_encod(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
     end = time.time()
@@ -168,7 +169,8 @@ if __name__ == '__main__':
     data.pr_target = pr_target[:,24:].cpu().numpy() # No predictions for the first 24 hours (since we use the 24h before to make a prediction)
     data.pr_cl = pr_cl.cpu().numpy()
     data.pr_reg = pr_reg.cpu().numpy()
-    data.pr = pr_cl.cpu().numpy() * pr_reg.cpu().numpy()
+    data.pr = pr_reg.cpu().numpy()
+    # data.pr = pr_cl.cpu().numpy() * pr_reg.cpu().numpy()
     data.times = times.cpu().numpy()
     data["low"].lat = low_high_graph["low"].lat.cpu().numpy()
     data["low"].lon = low_high_graph["low"].lon.cpu().numpy()
