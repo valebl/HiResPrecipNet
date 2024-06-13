@@ -52,6 +52,41 @@ class HiResPrecipNet(nn.Module):
         y_pred = self.predictor(encod_high)
         return y_pred
 
+
+class HiResPrecipNet_RNN_cl(nn.Module):
+    
+    def __init__(self, encoding_dim=128, seq_l=25, h_in=5*5, h_hid=5*5, n_layers=2, high_in=1, low2high_out=64, high_out=64):
+        super(HiResPrecipNet_RNN_cl, self).__init__()
+
+        # input shape (N,L,Hin)
+        self.rnn = nn.Sequential(
+            nn.GRU(h_in, h_hid, n_layers, batch_first=True),
+        )
+
+        self.dense = nn.Sequential(
+            nn.Linear(h_in*seq_l, encoding_dim),
+            nn.ReLU()
+        )
+        
+        self.downscaler = GATv2Conv((encoding_dim, high_in), out_channels=low2high_out, dropout=0.0, heads=1, aggr='mean', add_self_loops=False, bias=True)
+    
+        self.predictor = nn.Sequential(
+            nn.Linear(low2high_out, high_out),
+            nn.ReLU(),
+            nn.Linear(high_out, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+            )
+
+    def forward(self, data):    
+        encod_rnn, _ = self.rnn(data.x_dict['low']) # out, h     
+        encod_rnn = encod_rnn.flatten(start_dim=1)
+        encod_rnn = self.dense(encod_rnn)
+        encod_low2high  = self.downscaler((encod_rnn, data['high'].z_std), data.edge_index_dict[('low','to','high')])
+        y_pred = self.predictor(encod_low2high)
+        return y_pred
+
+
 class HiResPrecipNet_RNN(nn.Module):
     
     def __init__(self, encoding_dim=128, seq_l=25, h_in=5*5, h_hid=5*5, n_layers=2, high_in=1, low2high_out=64, high_out=64):
@@ -103,6 +138,7 @@ class HiResPrecipNet_RNN(nn.Module):
         encod_low2high  = torch.concatenate((data['high'].z_std, encod_low2high ),dim=-1)
         encod_high = self.processor(encod_low2high , data.edge_index_dict[('high','within','high')])
         y_pred = self.predictor(encod_high)
+        #y_pred = torch.sigmoid(y_pred)
         return y_pred
 
 class LowResPrecipNet(nn.Module):

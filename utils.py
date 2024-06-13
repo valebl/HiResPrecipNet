@@ -222,6 +222,7 @@ class AverageMeter(object):
 
 
 def accuracy_binary_one(prediction, target):
+    #prediction_class = torch.where(prediction > 0.5, 1.0, 0.0) 
     prediction_class = torch.where(prediction > 0.0, 1.0, 0.0) 
     correct_items = (prediction_class == target)
     acc = correct_items.sum().item() / prediction.shape[0]  
@@ -229,6 +230,7 @@ def accuracy_binary_one(prediction, target):
 
 
 def accuracy_binary_one_classes(prediction, target):
+    #prediction_class = torch.where(prediction > 0.5, 1.0, 0.0)
     prediction_class = torch.where(prediction > 0.0, 1.0, 0.0)
     correct_items = prediction_class == target
     correct_items_class0 = correct_items[target==0.0]
@@ -509,7 +511,7 @@ def check_freezed_layers(model, log_path, log_file, accelerator):
 class Trainer(object):
 
     def train_cl(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args,
-                        epoch_start, alpha=0.75, gamma=2):
+                        epoch_start, alpha=0.9, gamma=2):
         
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
