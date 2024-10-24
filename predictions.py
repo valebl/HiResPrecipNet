@@ -16,6 +16,7 @@ import dataset
 from dataset import Dataset_Graph, Iterable_Graph
 
 from utils import date_to_idxs, load_checkpoint, Tester
+from torch_geometric.utils import degree
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -26,7 +27,6 @@ parser.add_argument('--log_file', type=str, default='log.txt', help='log file')
 
 parser.add_argument('--checkpoint_cl', type=str)
 parser.add_argument('--checkpoint_reg', type=str)
-parser.add_argument('--checkpoint', type=str)
 parser.add_argument('--output_file', type=str, default="G_predictions.pkl")
 
 parser.add_argument('--graph_file', type=str, default=None) 
@@ -35,6 +35,7 @@ parser.add_argument('--model_cl', type=str, default=None)
 parser.add_argument('--model_reg', type=str, default=None) 
 parser.add_argument('--model_combined', type=str, default=None)
 parser.add_argument('--dataset_name', type=str, default=None) 
+parser.add_argument('--mode', type=str, default="prediction") 
 
 #-- start and end training dates
 parser.add_argument('--test_year_start', type=int)
@@ -70,7 +71,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'w') as f:
-            f.write("Starting the training...")
+            f.write("Starting the testing...")
             f.write(f"Cuda is available: {torch.cuda.is_available()}. There are {torch.cuda.device_count()} available GPUs.")
 
     test_start_idx, test_end_idx = date_to_idxs(args.test_year_start, args.test_month_start,
@@ -80,18 +81,24 @@ if __name__ == '__main__':
     test_start_idx_input, test_end_idx_input = date_to_idxs(args.test_year_start, args.test_month_start,
                                                 args.test_day_start, args.test_year_end, args.test_month_end,
                                                 args.test_day_end, args.first_year_input)
-    
-    test_start_idx_input = max(test_start_idx_input,24)
 
-    with open(args.input_path+"pr_gripho.pkl", 'rb') as f:
-        pr_gripho = pickle.load(f)
+    #correction for start idxs
+    if test_start_idx >= 24:
+        test_start_idx = test_start_idx-24
+        test_start_idx_input = test_start_idx_input-24
+    else:
+        with open(args.output_path+args.log_file, 'a') as f:
+            f.write(f"\ntest_start_idx={test_start_idx} < 24, thus testing will start from idx {test_start_idx+24}")
+
+    with open(args.input_path+"pr_target.pkl", 'rb') as f:
+        pr_target = pickle.load(f)
 
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
 
-    pr_gripho = pr_gripho[:, test_start_idx:test_end_idx]
+    pr_target = pr_target[:,test_start_idx:test_end_idx]
 
-    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input-24:test_end_idx_input,:]    
+    low_high_graph['low'].x = low_high_graph['low'].x[:,test_start_idx_input:test_end_idx_input,:] 
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     dataset_graph = Dataset_Graph(targets=None, graph=low_high_graph)
@@ -139,7 +146,11 @@ if __name__ == '__main__':
 
     start = time.time()
 
-    pr_cl, pr_reg, times = tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
+    if args.mode == "encoding":
+        pr_cl, pr_reg, times = tester.test_encoding(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
+    else:
+        pr_cl, pr_reg, times = tester.test(model_cl, model_reg, dataloader, low_high_graph=low_high_graph, args=args, accelerator=accelerator)
+
     end = time.time()
 
     accelerator.wait_for_everyone()
@@ -150,20 +161,27 @@ if __name__ == '__main__':
     times = accelerator.gather(times).squeeze()
     times, indices = torch.sort(times)
 
-    pr_cl = accelerator.gather(pr_cl).squeeze().swapaxes(0,-1)[:,indices]
-    pr_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,-1)[:,indices]
+    if args.mode == "encoding":
+        pr_cl = accelerator.gather(pr_cl).squeeze().swapaxes(0,1)[:,indices,:]
+        pr_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,1)[:,indices,:]
+    else:
+        pr_cl = accelerator.gather(pr_cl).squeeze().swapaxes(0,1)[:,indices]
+        pr_reg = accelerator.gather(pr_reg).squeeze().swapaxes(0,1)[:,indices]
 
     data = HeteroData()
-    data.pr_gripho = pr_gripho
-    data.pr_cl = pr_cl
-    data.pr_reg = pr_reg
-    data.pr = pr_cl * pr_reg
-    data.times = times
-    data["low"].lat = low_high_graph["low"].lat
-    data["low"].lon = low_high_graph["low"].lon
-    data["high"].lat = low_high_graph["high"].lat
-    data["high"].lon = low_high_graph["high"].lon
+    data.pr_target = pr_target[:,24:].cpu().numpy()
+    data.pr_cl = pr_cl.cpu().numpy()
+    data.pr_reg = pr_reg.cpu().numpy()
+    data.pr = pr_cl.cpu().numpy() * pr_reg.cpu().numpy()
+    data.times = times.cpu().numpy()
+    data["low"].lat = low_high_graph["low"].lat.cpu().numpy()
+    data["low"].lon = low_high_graph["low"].lon.cpu().numpy()
+    data["high"].lat = low_high_graph["high"].lat.cpu().numpy()
+    data["high"].lon = low_high_graph["high"].lon.cpu().numpy()
 
+    degree = degree(low_high_graph['high', 'within', 'high'].edge_index[0], low_high_graph['high'].num_nodes)
+    data["high"].degree = degree.cpu().numpy()
+    
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.log_file, 'a') as f:
             f.write(f"\nDone. Testing concluded in {end-start} seconds.")
@@ -171,7 +189,7 @@ if __name__ == '__main__':
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path + args.output_file, 'wb') as f:
-            pickle.dump(data.cpu(), f)
+            pickle.dump(data, f)
 
     
 

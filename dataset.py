@@ -44,11 +44,11 @@ class Dataset_Graph(Dataset):
 
     def __len__(self):
         #return len(self.features)
-        return self.graph['low'].x.shape[1] - 24
+        return self.graph['low'].x.shape[1]
         
     def _check_temporal_consistency(self):
         if self.targets is not None:
-            assert (self.graph['low'].x.shape[1] - 24) == self.targets.shape[1], "Temporal dimension inconsistency."
+            assert (self.graph['low'].x.shape[1]) == self.targets.shape[1], "Temporal dimension inconsistency."
 
     def _set_snapshot_count(self):
         self.snapshot_count = len(self)
@@ -58,10 +58,10 @@ class Dataset_Graph(Dataset):
         return node_degree
 
     def _get_features(self, time_index: int):
-        time_index_x = time_index + 24
-        #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]
-        x_low = self.graph['low'].x[:,time_index_x-24:time_index_x+1:6,:]
-        x_low = x_low.flatten(start_dim=1, end_dim=-1)
+        x_low = self.graph['low'].x[:,time_index-24:time_index+1:6,:]   # model HiResPrecipNet
+        #x_low = self.graph['low'].x[:,time_index-24:time_index+1,:]     # model TEST
+        x_low = x_low.flatten(start_dim=1, end_dim=-1)                  # model HiResPrecipNet
+        #x_low = x_low.flatten(start_dim=2, end_dim=-1)                  # model TEST
         return x_low
     
     def _get_target(self, time_index: int):
@@ -106,11 +106,13 @@ class Dataset_Graph(Dataset):
         #snapshot['low', 'within', 'low'].edge_index = self.graph['low', 'within', 'low'].edge_index
         snapshot['high', 'within', 'high'].edge_index = self.graph['high', 'within', 'high'].edge_index
         snapshot['low', 'to', 'high'].edge_index = self.graph['low', 'to', 'high'].edge_index
+        snapshot['low', 'to', 'high'].edge_weight = self.graph['low', 'to', 'high'].edge_weight
 
         snapshot['low'].x = x_low 
         #snapshot['high'].x_empty = self.graph['high'].x
-        snapshot['high'].x = torch.zeros((snapshot['high'].num_nodes,1))
+        snapshot['high'].x = self.graph['high'].z_std # torch.zeros((snapshot['high'].num_nodes,1))
         snapshot['high'].z_std = self.graph['high'].z_std
+        snapshot['high'].land_std = self.graph['high'].land_std
 
         snapshot['high'].lon = self.graph['high'].lon
         snapshot['high'].lat = self.graph['high'].lat
@@ -345,15 +347,15 @@ class Iterable_Graph(object):
         self.dataset_graph = dataset_graph
         self.shuffle = shuffle
         if self.shuffle:
-            self.sampling_vector = torch.randperm(len(self))
+            self.sampling_vector = torch.randperm(len(self)-24) + 24 # from 24 to len
         else:
-            self.sampling_vector = torch.arange(0, len(self))
+            self.sampling_vector = torch.arange(24, len(self))
 
     def __len__(self):
         return len(self.dataset_graph)
-    
+
     def __next__(self):
-        if self.t < len(self):
+        if self.t < len(self)-24:
             self.idx = self.sampling_vector[self.t].item()
             self.t = self.t + 1
             return self.idx
@@ -365,6 +367,8 @@ class Iterable_Graph(object):
     def __iter__(self):
         self.t = 0
         self.idx = 0
+        if self.shuffle:
+            self.sampling_vector = torch.randperm(len(self)-24) + 24 # from 24 to len
         return self
 
 def custom_collate_fn_graph(batch_list):

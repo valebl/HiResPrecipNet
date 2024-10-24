@@ -35,7 +35,7 @@ def use_gpu_if_possible():
 ######################################################
 
 
-def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr):
+def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, pr, z, mask_land, *argv):
     r'''
     Derives a new version of the longitude, latitude and precipitation
     tensors, by only retaining the values inside the specified lon-lat rectangle
@@ -53,17 +53,30 @@ def cut_window(lon_min, lon_max, lat_min, lat_max, lon, lat, z, pr):
     lat_sel = lat[bool_both]
     z_sel = z[bool_both]
     pr_sel = pr[:,bool_both]
-    return lon_sel, lat_sel, z_sel, pr_sel
+    v = []
+    for arg in argv:
+        v.append(arg[bool_both])
+    if mask_land is None:
+        return lon_sel, lat_sel, pr_sel, z_sel, None, *v
+    else:
+        mask_land = mask_land[bool_both]
+        return lon_sel, lat_sel, pr_sel, z_sel, mask_land, *v
 
 
-def retain_valid_nodes(lon, lat, pr, z):
+def retain_valid_nodes(lon, lat, pr, z, mask_land=None, *argv):
 
-    valid_nodes = ~torch.isnan(pr).all(dim=0)
+    if mask_land is None:
+        valid_nodes = ~torch.isnan(pr).all(dim=0)
+    else:
+        valid_nodes = ~torch.isnan(mask_land)
     lon = lon[valid_nodes]
     lat = lat[valid_nodes]
     pr = pr[:,valid_nodes]
     z = z[valid_nodes]
-    return lon, lat, pr, z
+    v = []
+    for arg in argv:
+        v.append(arg[valid_nodes])
+    return lon, lat, pr, z, *v
 
 def select_nodes(lon_centre, lat_centre, lon, lat, pr, z, cell_idx, cell_idx_array, mask_1_cell_subgraphs,
         lon_lat_z_graph, pr_graph, count_points, progressive_idx, offset=0.25, offset_9=0.25):
@@ -134,25 +147,31 @@ def derive_edge_indexes_within(lon_radius, lat_radius, lon_n1 ,lat_n1, lon_n2, l
     return edge_indexes
 
 
-def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9, undirected=False):
-    
+def derive_edge_indexes_low2high(lon_n1 ,lat_n1, lon_n2, lat_n2, n_knn=9, undirected=False, use_edge_weight=True):
+
     edge_index = []
+    edge_weight = []
 
     lonlat_n1 = torch.concatenate((lon_n1.unsqueeze(-1), lat_n1.unsqueeze(-1)),dim=-1)
     lonlat_n2 = torch.concatenate((lon_n2.unsqueeze(-1), lat_n2.unsqueeze(-1)),dim=-1)
 
-    dist = torch.cdist(lonlat_n2, lonlat_n1, p=2)
+    dist = torch.cdist(lonlat_n2.double(), lonlat_n1.double(), p=2, compute_mode='donot_use_mm_for_euclid_dist')
     _ , knn = dist.topk(n_knn, largest=False, dim=-1)
 
     for n_n2 in range(lonlat_n2.shape[0]):
         for n_n1 in knn[n_n2,:]:
             edge_index.append(torch.tensor([n_n1, n_n2]))
+            edge_weight.append(dist[n_n2, n_n1])
             if undirected:
                 edge_index.append(torch.tensor([n_n2, n_n1]))
 
     edge_index = torch.stack(edge_index)
-
-    return edge_index
+    edge_weight = torch.stack(edge_weight)
+    
+    if use_edge_weight:
+        return edge_index, edge_weight
+    else:
+        return edge_index
 
 
 def date_to_idxs(year_start, month_start, day_start, year_end, month_end, day_end,
@@ -209,34 +228,40 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def accuracy_binary_one(prediction, target):
-    prediction_class = torch.where(prediction > 0.0, 1.0, 0.0) 
-    correct_items = (prediction_class == target)
-    acc = correct_items.sum().item() / prediction.shape[0]  
-    return acc
+def accuracy_binary_one(prediction, target, reduction="mean"):
+    prediction_class = torch.where(prediction > 0.0, 1.0, 0.0)
+    correct_items = (prediction_class == target).float()
+    if reduction is None:
+        return correct_items
+    elif reduction == "mean":
+        return torch.mean(correct_items)
+        # return correct_items.sum() / prediction.shape[0]
 
 
-def accuracy_binary_one_classes(prediction, target):
+def accuracy_binary_one_classes(prediction, target, reduction="mean"):
     prediction_class = torch.where(prediction > 0.0, 1.0, 0.0)
     correct_items = prediction_class == target
-    correct_items_class0 = correct_items[target==0.0]
-    if correct_items_class0.shape[0] > 0:
-        acc_class0 = correct_items_class0.sum().item() / correct_items_class0.shape[0]
-    else:
-        acc_class0 = torch.nan
-    correct_items_class1 = correct_items[target==1.0]
-    if correct_items_class1.shape[0] > 0:
-        acc_class1 = correct_items_class1.sum().item() / correct_items_class1.shape[0]
-    else:
-        acc_class1 = torch.nan
-    return acc_class0, acc_class1
+    correct_items_class0 = torch.where(target==0.0, correct_items, torch.nan)
+    correct_items_class1 = torch.where(target==1.0, correct_items, torch.nan)
+    if reduction is None:
+        return correct_items_class0, correct_items_class1
+    elif reduction == "mean":
+        if correct_items_class0.shape[0] > 0:
+            acc_class0 = torch.nanmean(correct_items_class0)
+        else:
+            acc_class0 = torch.tensor(torch.nan)
+        if correct_items_class1.shape[0] > 0:
+            acc_class1 = torch.nanmean(correct_items_class1)
+        else:
+            acc_class1 = torch.tensor(torch.nan)
+        return acc_class0, acc_class1
 
 
 def accuracy_binary_two(prediction, target):
     prediction = torch.nn.functional.softmax(prediction, dim=-1)
     prediction_class = torch.argmax(prediction, dim=-1).squeeze()
     correct_items = (prediction_class == target)
-    acc = correct_items.sum().item() / prediction.shape[0]  
+    acc = correct_items.sum() / prediction.shape[0]  
     return acc
 
 
@@ -246,14 +271,14 @@ def accuracy_binary_two_classes(prediction, target):
     correct_items = prediction_class == target
     correct_items_class0 = correct_items[target==0.0]
     if correct_items_class0.shape[0] > 0:
-        acc_class0 = correct_items_class0.sum().item() / correct_items_class0.shape[0]
+        acc_class0 = correct_items_class0.sum() / correct_items_class0.shape[0]
     else:
-        acc_class0 = torch.nan
+        acc_class0 = torch.tensor(torch.nan)
     correct_items_class1 = correct_items[target==1.0]
     if correct_items_class1.shape[0] > 0:
-        acc_class1 = correct_items_class1.sum().item() / correct_items_class1.shape[0]
+        acc_class1 = correct_items_class1.sum() / correct_items_class1.shape[0]
     else:
-        acc_class1 = torch.nan
+        acc_class1 = torch.tensor(torch.nan)
     return acc_class0, acc_class1
 
 
@@ -262,9 +287,14 @@ def accuracy_binary_two_classes(prediction, target):
 #-----------------------------------------------------
 
 
-def weighted_mse_loss(input_batch, target_batch, weights):
+def weighted_mse_loss(input_batch, target_batch, weights, reduction="mean"):
     #return (weights * (input_batch - target_batch) ** 2).sum() / weights.sum()
-    return torch.mean(weights * (input_batch - target_batch) ** 2)
+    if reduction is None:
+        return weights * (input_batch - target_batch) ** 2
+    elif reduction == "mean":
+        #print(f"w: {weights.shape[0]}, sum: {torch.sum(weights)}")
+        #sys.exit()
+        return torch.sum(weights * (input_batch - target_batch) ** 2) / torch.sum(weights)
 
 def weighted_mse_loss_ASYM(input_batch, target_batch, weights):
     return torch.mean(torch.abs(input_batch - target_batch) + weights**2 * torch.clamp(target_batch - input_batch, min=0))
@@ -273,15 +303,26 @@ def MSE_weighted2(y_true, y_pred):
     return torch.mean(torch.exp(2.0 * torch.expm1(y_true)) * (y_pred - y_true)**2)
 
 class modified_mse_quantile_loss():
-    def __init__(self, q=0.85, alpha=0.2):
+    def __init__(self, q=0.75, alpha=0.5):
         self.mse_loss = nn.MSELoss()
         self.q = q
         self.alpha = alpha
     
-    def __call__(self, prediction_batch, target_batch):
+    def __call__(self, prediction_batch, target_batch, w=None):
         loss_quantile = torch.mean(torch.max(self.q*(target_batch-prediction_batch), (1-self.q)*(prediction_batch-target_batch)))
-        loss_mse = self.mse_loss(prediction_batch, target_batch) 
+        loss_mse = self.mse_loss(prediction_batch, target_batch)
         return self.alpha * loss_mse + (1-self.alpha) * loss_quantile
+
+class weighted_mae_mse_loss():
+    def __init__(self, alpha=0.1):
+        self.mse_loss = nn.MSELoss()
+        self.alpha = alpha
+    
+    def __call__(self, prediction_batch, target_batch, weights):
+        #loss_wmae = torch.sum(weights * torch.abs(prediction_batch - target_batch)) / torch.sum(weights)        
+        loss_wmae = torch.sum(weights * (prediction_batch - target_batch)**2) / torch.sum(weights)        
+        loss_mse = self.mse_loss(prediction_batch, target_batch)
+        return loss_mse + self.alpha * loss_wmae
 
 def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, threshold=np.log1p(1)):
     mask_low = ground_truth <= threshold
@@ -289,6 +330,77 @@ def threshold_quantile_loss(predictions, ground_truth, q_low=0.01, q_high=0.99, 
     loss_high = ~mask_low * torch.max(q_high*(ground_truth-predictions), (1-q_high)*(predictions-ground_truth))
     #loss_mse = nn.functional.mse_loss(predictions, ground_truth) 
     return torch.mean(loss_low + loss_high)
+
+
+class quantized_bins_loss():
+    def __init__(self):
+        self.mse_loss = nn.MSELoss(reduction='none')
+        self.mae_loss = nn.L1Loss(reduction='none')
+    
+    def __call__(self, prediction_batch, target_batch, bins):
+        loss_quantized = 0
+        w_sum = 0
+        bins = bins.int()
+        loss_mse = self.mse_loss(prediction_batch, target_batch)
+        #loss_mae = self.mae_loss(prediction_batch, target_batch)
+        for b in torch.unique(bins):
+            mask_b = bins == b
+            omega = mask_b.sum()
+            loss_quantized += 1/omega * torch.sum(loss_mse[mask_b])
+            w_sum += 1/omega * len(mask_b)
+        return loss_quantized / w_sum
+        
+
+class quantized_loss():
+    '''
+    w:      weight for each bin, computed as 1-h, where h is normalized histogram of
+            a given input data x considering B bins the normalization is
+            obtained by dividing the bins by the maximum bin count observed for x
+            shape = (n_bins)
+    bins:   array containing the bin number for each of the nodes
+            shape = (n_nodes)
+    '''
+    def __init__(self):
+        self.mse_loss = nn.MSELoss(reduction='mean')
+        self.mae_loss = nn.L1Loss(reduction='none')
+        self.alpha = 0.01
+
+        self.w = torch.tensor([0.        , 0.20456941, 0.52693047, 0.56494106, 0.59231159,
+                                       0.67023962, 0.68921502, 0.70819423, 0.7411285 , 0.75479008,
+                                       0.7737191 , 0.78929395, 0.80347719, 0.81660931, 0.8285885 ,
+                                       0.83832823, 0.85146701, 0.85949702, 0.86924451, 0.87788256,
+                                       0.88610793, 0.89392443, 0.90190295, 0.90878371, 0.91547214,
+                                       0.92192711, 0.92807287, 0.93377763, 0.93902738, 0.94403563,
+                                       0.94875019, 0.95323498, 0.95743294, 0.96127977, 0.96490447,
+                                       0.96828489, 0.9714737 , 0.97451818, 0.97719182, 0.97972833,
+                                       0.98202235, 0.98412056, 0.98599729, 0.98776385, 0.98923554,
+                                       0.99057275, 0.9917499 , 0.99280536, 0.99369716, 0.99444864,
+                                       0.99514605, 0.99577498, 0.99629746, 0.99677078, 0.99717185,
+                                       0.99753893, 0.99786902, 0.9981464 , 0.99837078, 0.99859128,
+                                       0.99879629, 0.99896886, 0.99911629, 0.99925363, 0.99935432,
+                                       0.99946032, 0.99954732, 0.99961797, 0.99967832, 0.99972891,
+                                       0.99977934, 0.99981992, 0.99985175, 0.99987655, 0.99989948,
+                                       0.99991631, 0.99992976, 0.99994152, 0.99995154, 0.99996049,
+                                       0.99996751, 0.99997336, 0.99997695, 0.99997896, 0.99998267,
+                                       0.99998472, 0.99998844, 0.99998848, 0.99999175, 0.99999273,
+                                       0.99999252, 0.99999363, 0.99999481, 0.99999493, 0.99999608,
+                                       0.99999702, 0.99999649, 0.99999767, 0.99999763, 0.99999812,
+                                       0.99999808, 0.99999845, 0.99999886, 0.99999922, 0.99999955,
+                                       0.99999984, 1.]) # to be specified
+
+    def __call__(self, prediction_batch, target_batch, bins, device):
+        loss_quantized = 0
+        self.w = self.w.to(device)
+        bins = bins.int()
+        loss_mse = self.mse_loss(prediction_batch, target_batch)
+        loss_mae = self.mae_loss(prediction_batch, target_batch)
+        for b in torch.unique(bins):
+            mask_b = bins == b
+            omega = mask_b.sum()
+            loss_quantized += 1/omega * self.w[b] * torch.sum(loss_mae[mask_b])
+        return loss_mse + self.alpha * loss_quantized
+        #return loss_quantized
+        
 
 #-----------------------------------------------------
 #-------------------- LOAD CHECKPOINT ----------------
@@ -350,16 +462,11 @@ class Trainer(object):
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
 
             # Define objects to track meters
-            # -> Train
             loss_meter = AverageMeter()
             acc_meter = AverageMeter()
             acc_class0_meter = AverageMeter()
             acc_class1_meter = AverageMeter()
-            # -> Validation
-            loss_meter_val = AverageMeter()
-            acc_meter_val = AverageMeter()
-            acc_class0_meter_val = AverageMeter()
-            acc_class1_meter_val = AverageMeter()
+            
             start = time.time()
 
             for graph in dataloader_train:
@@ -376,9 +483,9 @@ class Trainer(object):
                 acc = accuracy_binary_one(y_pred, y)
                 acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)
 
-                acc_meter.update(val=acc, n=1)
-                acc_class0_meter.update(val=acc_class0, n=1)
-                acc_class1_meter.update(val=acc_class1, n=1)
+                acc_meter.update(val=acc.item(), n=1)
+                acc_class0_meter.update(val=acc_class0.item(), n=1)
+                acc_class1_meter.update(val=acc_class1.item(), n=1)
                 accelerator.log({'epoch':epoch, 'accuracy iteration': acc_meter.val, 'loss avg': loss_meter.avg,
                     'accuracy avg': acc_meter.avg, 'accuracy class0 avg': acc_class0_meter.avg, 'accuracy class1 avg': acc_class1_meter.avg})
                 
@@ -398,29 +505,43 @@ class Trainer(object):
             torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
             
             model.eval()
-            # Perform validation step
-            for graph in dataloader_val:
+
+            y_pred_val = torch.tensor([]).to(accelerator.device)
+            y_val = torch.tensor([]).to(accelerator.device)
+            w_val = torch.tensor([]).to(accelerator.device)
+            train_mask_val = torch.tensor([]).to(accelerator.device)
                 
-                train_mask = graph["high"].train_mask
+            with torch.no_grad():    
+                for i, graph in enumerate(dataloader_val):
+                    graph = graph.to(accelerator.device)
+                    train_mask = graph["high"].train_mask
+                    if train_mask.sum() == 0:
+                        continue                    
 
-                y_pred = model(graph).squeeze()[train_mask]
-                y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y, alpha, gamma, reduction='mean')
-                acc = accuracy_binary_one(y_pred, y)
-                acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred, y)   
+                    y_pred = model(graph).squeeze()
+                    y = graph['high'].y
+    
+                    # Append the batch results
+                    y_pred_val = torch.cat((y_pred_val, y_pred))
+                    y_val = torch.cat((y_val, y))
+                    train_mask_val = torch.cat((train_mask_val, train_mask))
+   
+            # Create tensors
+            y_pred_val = y_pred_val[train_mask_val.bool()]
+            y_val = y_val[train_mask_val.bool()]
 
-                loss_meter_val.update(val=loss.item(), n=1)    
-                acc_meter_val.update(val=acc, n=1)
-                acc_class0_meter_val.update(val=acc_class0, n=1)
-                acc_class1_meter_val.update(val=acc_class1, n=1)
+            # Compute metrics on all validation dataset            
+            loss_val = loss_fn(y_pred_val, y_val, alpha, gamma, reduction="mean")
+            acc_val = accuracy_binary_one(y_pred_val, y_val)
+            acc_class0_val, acc_class1_val = accuracy_binary_one_classes(y_pred_val, y_val)
             
-            accelerator.log({'validation loss': loss_meter_val.avg, 'validation accuracy': acc_meter_val.avg,
-                                'validation accuracy class0': acc_class0_meter_val.avg, 'validation accuracy class1': acc_class1_meter_val.avg})
+            accelerator.log({'validation loss': loss_val.item(), 'validation accuracy': acc_val.item(),
+                'validation accuracy class0': acc_class0_val.item(), 'validation accuracy class1': acc_class1_val.item()})
+    
         return model
 
     def train_reg(self, model, dataloader_train, dataloader_val, optimizer, loss_fn, lr_scheduler, accelerator, args, epoch_start=0):
         
-        mse_loss = nn.MSELoss()
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write(f"\nStart training the regressor.")
@@ -430,9 +551,7 @@ class Trainer(object):
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} --- learning rate {optimizer.param_groups[0]['lr']:.8f}")
             loss_meter = AverageMeter()
-            rmse_loss_meter = AverageMeter()
             loss_meter_val = AverageMeter()
-            rmse_loss_meter_val = AverageMeter()
             
             start = time.time()
 
@@ -441,48 +560,74 @@ class Trainer(object):
                 optimizer.zero_grad()
                 y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
-                #loss = loss_fn(y_pred, y)
                 w = graph['high'].w[train_mask]
+                #loss = loss_fn(y_pred, y, w, device=accelerator.device)
                 loss = loss_fn(y_pred, y, w)
+                #loss = loss_fn(y_pred, y)
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_(model.parameters(), 5)
                 optimizer.step()
                 loss_meter.update(val=loss.item(), n=1)    
                 accelerator.log({'epoch':epoch, 'loss iteration': loss_meter.val, 'loss avg': loss_meter.avg})
-                loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                rmse_loss_meter.update(val=loss_rmse.item(), n=1)    
-                accelerator.log({'epoch':epoch, 'RMSE loss iteration': rmse_loss_meter.val, 'RMSE loss avg': rmse_loss_meter.avg})
 
             end = time.time()
             accelerator.log({'loss epoch': loss_meter.avg})
-            accelerator.log({'RMSE loss epoch': rmse_loss_meter.avg})
             if accelerator.is_main_process:
                 with open(args.output_path+args.log_file, 'a') as f:
                     f.write(f"\nEpoch {epoch+1} completed in {end - start:.4f} seconds. Loss - total: {loss_meter.sum:.4f} - average: {loss_meter.avg:.10f}. ")
-            
-            if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
-                lr_scheduler.step()
+             
+            # if lr_scheduler is not None and lr_scheduler.get_last_lr()[0] > 0.00001:
+            #     lr_scheduler.step()
             
             accelerator.save_state(output_dir=args.output_path+f"checkpoint_{epoch}/")
             torch.save({"epoch": epoch}, args.output_path+f"checkpoint_{epoch}/epoch")
             
             model.eval()
-            # Perform validation step
-            for graph in dataloader_val:
-                
-                train_mask = graph["high"].train_mask
 
-                y_pred = model(graph).squeeze()[train_mask]
-                y = graph['high'].y[train_mask]
-                #loss = loss_fn(y_pred, y)
-                w = graph['high'].w[train_mask]
-                loss = loss_fn(y_pred, y, w)
-                loss_meter_val.update(val=loss.item(), n=1)    
-                loss_rmse = torch.sqrt(mse_loss(torch.expm1(y_pred), torch.expm1(y)))
-                rmse_loss_meter_val.update(val=loss_rmse.item(), n=1)    
+            # y_pred_val = torch.tensor([]).to(accelerator.device)
+            # y_val = torch.tensor([]).to(accelerator.device)
+            # w_val = torch.tensor([]).to(accelerator.device)
+            # train_mask_val = torch.tensor([]).to(accelerator.device)
+                
+            with torch.no_grad():    
+                for i, graph in enumerate(dataloader_val):
+                    graph = graph.to(accelerator.device)
+                    train_mask = graph["high"].train_mask
+                    if train_mask.sum() == 0:
+                        continue                    
+                    y_pred = model(graph).squeeze()[train_mask]
+                    y = graph['high'].y[train_mask]
+                    w = graph['high'].w[train_mask]
+                    loss_val = loss_fn(y_pred, y, w)
+                    #loss_val = loss_fn(y_pred, y)
+                    loss_meter_val.update(val=loss_val.item(), n=1)
 
             accelerator.log({'validation loss': loss_meter_val.avg})
-            accelerator.log({'validation RMSE loss': rmse_loss_meter_val.avg})
+            if lr_scheduler is not None: # and lr_scheduler.get_last_lr()[0] > 0.00001:
+                lr_scheduler.step(loss_meter_val.avg)
+                    
+            #         # Append the batch results
+            #         y_pred_val = torch.cat((y_pred_val, y_pred))
+            #         y_val = torch.cat((y_val, y))
+            #         w_val = torch.cat((w_val, w))
+            #         train_mask_val = torch.cat((train_mask_val, train_mask))
+    
+            # # Create tensors
+            # y_pred_val = y_pred_val[train_mask_val.bool()]
+            # y_val = y_val[train_mask_val.bool()]
+            # w_val = w_val[train_mask_val.bool()]
+    
+            # #with open(args.output_path + "y_pred.pkl", 'wb') as f:
+            # #    pickle.dump(y_pred_val, f)
+            # #with open(args.output_path + "y.pkl", 'wb') as f:
+            # #    pickle.dump(y_val, f)
+            # #with open(args.output_path + "w.pkl", 'wb') as f:
+            # #    pickle.dump(w_val, f)
+
+            # #loss_val = loss_fn(y_pred_val, y_val, w_val, device=accelerator.device)
+            # loss_val = loss_fn(y_pred_val, y_val, w_val)
+            # accelerator.log({'validation loss': loss_val.item()})
+
         return model
     
 
@@ -509,12 +654,11 @@ class Tester(object):
                 
                 # Regressor
                 y_pred_reg = model_reg(graph)
-                pr_reg.append(torch.expm1(y_pred_reg)) 
-                #pr_reg.append(y_pred_reg)
+                #pr_reg.append(torch.expm1(y_pred_reg)) 
+                pr_reg.append(y_pred_reg)
 
                 # Classifier
                 y_pred_cl = model_cl(graph)
-                #-- sigmoid focal loss ->
                 pr_cl.append(torch.where(y_pred_cl >= 0.0, 1.0, 0.0))
                 
                 if step % 100 == 0:
@@ -528,6 +672,41 @@ class Tester(object):
         times = torch.stack(times)
 
         return pr_cl, pr_reg, times
+    
+    def test_encoding(self, model_cl, model_reg, dataloader,low_high_graph, args, accelerator=None):
+        model_cl.eval()
+        model_reg.eval()
+        step = 0 
+
+        pr_cl = []
+        pr_reg = []
+        times = []
+        with torch.no_grad():    
+            for graph in dataloader:
+
+                t = graph.t
+                times.append(t)
+                
+                # Regressor
+                y_pred_reg = model_reg(graph)
+                pr_reg.append(y_pred_reg)
+
+                # Classifier
+                y_pred_cl = model_cl(graph)
+                pr_cl.append(y_pred_cl)
+                
+                if step % 100 == 0:
+                    if accelerator is None or accelerator.is_main_process:
+                        with open(args.output_path+args.log_file, 'a') as f:
+                            f.write(f"\nStep {step} done.")
+                step += 1 
+
+        pr_cl = torch.stack(pr_cl)
+        pr_reg = torch.stack(pr_reg)
+        times = torch.stack(times)
+
+        return pr_cl, pr_reg, times
+    
     
     def test_cl(self, model_cl, dataloader,low_high_graph, args, accelerator=None):
         model_cl.eval()
@@ -590,53 +769,183 @@ class Tester(object):
 
 class Validator(object):
 
-    def validate_cl(self, model, dataloader, loss_fn):
+    def validate_cl(self, model, dataloader, loss_fn, accelerator, alpha=0.75, gamma=2):
 
         model.eval()
 
-        loss_meter = AverageMeter()
-        acc_meter = AverageMeter()
-        acc_class0_meter = AverageMeter()
-        acc_class1_meter = AverageMeter()
+        # loss_meter = AverageMeter()
+        # acc_meter = AverageMeter()
+        # acc_class0_meter = AverageMeter()
+        # acc_class1_meter = AverageMeter()
 
+        y_pred_val = []
+        y_val = []
+        train_mask_val = []
+    
         with torch.no_grad():    
             for graph in dataloader:
 
                 train_mask = graph["high"].train_mask
 
                 # Classifier
-                y_pred = model(graph)[train_mask]
-                y = graph['high'].y[train_mask]
-                loss = loss_fn(y_pred, y.to(torch.int64))
+                y_pred = model(graph).squeeze()
+                y = graph['high'].y
 
-                acc = accuracy_binary_two(y_pred, y)
-                acc_class0, acc_class1 = accuracy_binary_two_classes(y_pred, y)
+                # Gather results from other GPUs
+                accelerator.wait_for_everyone()
+                all_y_pred, all_y, all_train_mask = accelerator.gather_for_metrics((y_pred, y, train_mask))
 
-                loss_meter.update(val=loss.item(), n=1)    
-                acc_meter.update(val=acc, n=1)
-                acc_class0_meter.update(val=acc_class0, n=1)
-                acc_class1_meter.update(val=acc_class1, n=1)
+                # Append the batch results
+                y_pred_val.append(all_y_pred)
+                y_val.append(all_y)
+                train_mask_val.append(all_train_mask)
 
-        return loss_meter.avg, acc_meter.avg, acc_class0_meter.avg, acc_class1_meter.avg
-    
-    def validate_reg(self, model, dataloader, loss_fn):
+            # Create tensors
+            train_mask_val = torch.stack(train_mask_val)
+            y_pred_val = torch.stack(y_pred_val)[train_mask_val]
+            y_val = torch.stack(y_val)[train_mask_val]
+
+            print(train_mask_val.shape, train_mask_val.sum(), y_pred_val.shape, y_val.shape)
+
+            # Compute metrics on all validation dataset            
+            loss = loss_fn(y_pred_val, y_val, alpha, gamma, reduction="mean")
+            acc = accuracy_binary_one(y_pred_val, y_val)
+            acc_class0, acc_class1 = accuracy_binary_one_classes(y_pred_val, y_val)
+
+        return loss.item(), acc.item(), acc_class0.item(), acc_class1.item()
+
+            # loss_meter.update(val=loss.item(), n=1)
+            # acc_meter.update(val=acc.item(), n=1)
+            # if not acc_class0.isnan():
+            #     acc_class0_meter.update(val=acc_class0.item(), n=1)
+            # if not acc_class1.isnan():
+            #     acc_class1_meter.update(val=acc_class1.item(), n=1)
+
+        # return loss_meter.avg, acc_meter.avg, acc_class0_meter.avg, acc_class1_meter.avg
+
+    def validate_reg(self, model, dataloader, loss_fn, accelerator, args):
 
         model.eval()
 
-        loss_meter = AverageMeter()
-
-        with torch.no_grad():    
-            for graph in dataloader:
+        loss_meter_val = AverageMeter()
+        
+        with torch.no_grad(): 
+            for i, graph in enumerate(dataloader):
 
                 train_mask = graph["high"].train_mask
-
+                if train_mask.sum() == 0:
+                    continue
+                    
                 # Regressor
-                y_pred = model(graph)[train_mask]
+                y_pred = model(graph).squeeze()[train_mask]
                 y = graph['high'].y[train_mask]
                 w = graph['high'].w[train_mask]
                 loss = loss_fn(y_pred, y, w)
+                # if accelerator is None or accelerator.is_main_process:
+                #    with open(args.output_path + args.log_file, 'a') as f:
+                #        f.write(f"y_pred: {y_pred}")
+                #        f.write(f"y: {y}")
+                #        f.write(f"w: {w}")
+                # sys.exit()
 
-                loss_meter.update(val=loss.item(), n=1)   
+                loss_meter_val.update(val=loss.item(), n=1)   
 
-        return loss_meter.avg
+        return loss_meter_val.avg
+
+    # def validate_reg(self, model, dataloader, loss_fn, accelerator, args):
+
+    #     model.eval()
+
+    #     y_pred_val = torch.tensor([]).to(accelerator.device)
+    #     y_val = torch.tensor([]).to(accelerator.device)
+    #     w_val = torch.tensor([]).to(accelerator.device)
+    #     train_mask_val = torch.tensor([]).to(accelerator.device)
+        
+    #     with torch.no_grad(): 
+    #         for i, graph in enumerate(dataloader):
+
+    #             train_mask = graph["high"].train_mask
+    #             if train_mask.sum() == 0:
+    #                 continue
+                    
+    #             # Regressor
+    #             y_pred = model(graph).squeeze()
+    #             y = graph['high'].y
+    #             w = graph['high'].w
+
+    #             # Append the batch results
+    #             y_pred_val = torch.concatenate((y_pred_val, y_pred))
+    #             y_val = torch.concatenate((y_val, y))
+    #             w_val = torch.concatenate((w_val, w))
+    #             train_mask_val = torch.concatenate((train_mask_val, train_mask))
+    #             #if accelerator is None or accelerator.is_main_process:
+    #             #    with open(args.output_path + args.log_file, 'a') as f:
+    #             #        f.write(f"{i}: {y_pred_val.shape}\n")
+                
+    #         # Gather results from other GPUs
+    #         # accelerator.wait_for_everyone()
+    #         # all_y_pred_val, all_y_val, all_w_val, all_train_mask_val = accelerator.gather_for_metrics(
+    #         #         (y_pred_val, y_val, w_val, train_mask_val))
+    
+    #         #if accelerator is None or accelerator.is_main_process:
+    #         #    with open(args.output_path + args.log_file, 'a') as f:
+    #         #        f.write(f"main: {y_pred_val.shape} i = {i}, c = {c}\n\n")
+                
+    #         # Create tensors
+    #         y_pred_val = y_pred_val[train_mask_val.bool()]
+    #         y_val = y_val[train_mask_val.bool()]
+    #         w_val = w_val[train_mask_val.bool()]
+    
+    #         #with open(args.output_path + "y_pred.pkl", 'wb') as f:
+    #         #    pickle.dump(y_pred_val, f)
+    #         #with open(args.output_path + "y.pkl", 'wb') as f:
+    #         #    pickle.dump(y_val, f)
+    #         #with open(args.output_path + "w.pkl", 'wb') as f:
+    #         #    pickle.dump(w_val, f)
+
+    #         loss = loss_fn(y_pred_val, y_val, w_val)
+        
+    #     #print(accelerator.device, all_y_pred_val.shape, all_y_val.shape, all_w_val.shape, all_train_mask_val.shape, "\n\n")
+    #     #sys.exit()
+    #     return loss.item()
+
+    
+    # def validate_reg(self, model, dataloader, loss_fn):
+
+    #     model.eval()
+
+    #     loss_meter = AverageMeter()
+
+    #     pr_reg = []
+    #     pr_target = []
+    #     weights = []
+    #     mask = []
+        
+    #     with torch.no_grad():    
+    #         for graph in dataloader:
+
+    #             train_mask = graph["high"].train_mask
+    #             if train_mask.sum() == 0:
+    #                 continue
+    #             # Regressor
+    #             y_pred = model(graph).squeeze() #[train_mask]
+    #             y = graph['high'].y #[train_mask]
+    #             w = graph['high'].w #[train_mask]
+    #             #loss = loss_fn(y_pred, y, w)
+
+    #             #loss_meter.update(val=loss.item(), n=1)   
+    #             pr_reg.append(y_pred)
+    #             pr_target.append(y)
+    #             weights.append(w)
+    #             mask.append(train_mask)
+
+    #     mask = torch.stack(mask)
+    #     pr_reg = torch.stack(pr_reg)[mask]
+    #     pr_target = torch.stack(pr_target)[mask]
+    #     weights = torch.stack(weights)[mask]        
+        
+    #     return loss_fn(pr_reg, pr_target, weights)
+        
+    #     #print(y_pred, y, w, train_mask)
+    #     return loss_meter.avg
 

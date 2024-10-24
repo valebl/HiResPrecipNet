@@ -1,5 +1,7 @@
 from torch_geometric.data import HeteroData
 import torch
+torch.manual_seed(100)
+
 from torch import nn
 import torchvision.ops
 import matplotlib.pyplot as plt
@@ -53,15 +55,11 @@ parser.add_argument('--ctd_training',  action='store_true')
 parser.add_argument('--no-ctd_training', dest='ctd_training', action='store_false')
 
 parser.add_argument('--loss_fn', type=str, default="mse_loss")
-parser.add_argument('--lon_min', type=float)
-parser.add_argument('--lon_max', type=float)
-parser.add_argument('--lat_min', type=float)
-parser.add_argument('--lat_max', type=float)
-parser.add_argument('--interval', type=float, default=0.25)
 
 parser.add_argument('--model_type', type=str)
 parser.add_argument('--model_name', type=str, default='HiResPrecipNet')
 parser.add_argument('--dataset_name', type=str, default='Dataset_Graph')
+parser.add_argument('--collate_name', type=str)
 
 #-- start and end training dates
 parser.add_argument('--train_year_start', type=float)
@@ -95,6 +93,7 @@ if __name__ == '__main__':
     os.environ['WANDB_USERNAME'] = 'valebl'
     os.environ['WANDB_MODE'] = 'offline'
     os.environ['WANDB_CONFIG_DIR']='./wandb/'
+    os.environ['WANDB__SERVICE_WAIT'] = '300'
 
     accelerator.init_trackers(
             project_name=args.wandb_project_name
@@ -115,17 +114,23 @@ if __name__ == '__main__':
     # Loss
     if args.loss_fn == 'sigmoid_focal_loss':
         loss_fn = getattr(torchvision.ops, args.loss_fn)
-    elif args.loss_fn == 'weighted_cross_entropy_loss':
-        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([0.25, 0.75]), label_smoothing=0.1)
+    elif args.loss_fn == 'cross_entropy':
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.,1.,2.,5.,10.,20.,50.]))
+    elif args.loss_fn == 'binary_cross_entropy_with_logits':
+        loss_fn = nn.functional.binary_cross_entropy_with_logits
     elif args.loss_fn == 'weighted_mse_loss':
         loss_fn = getattr(utils, args.loss_fn)
     elif args.loss_fn == 'weighted_mse_loss_ASYM':
         loss_fn = getattr(utils, args.loss_fn)
-    elif args.loss_fn == 'quantile_loss':
-        loss_fn = getattr(utils, args.loss_fn) 
+    elif args.loss_fn == 'quantized_loss':
+        loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == 'quantized_bins_loss':
+        loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'MSE_weighted2':
         loss_fn = getattr(utils, args.loss_fn) 
     elif args.loss_fn == 'modified_mse_quantile_loss':
+        loss_fn = getattr(utils, args.loss_fn)()
+    elif args.loss_fn == "weighted_mae_mse_loss":
         loss_fn = getattr(utils, args.loss_fn)()
     elif args.loss_fn == 'threshold_quantile_loss':
         loss_fn = getattr(utils, args.loss_fn)
@@ -140,9 +145,12 @@ if __name__ == '__main__':
     train_start_idx, train_end_idx = date_to_idxs(args.train_year_start, args.train_month_start,
                                                                       args.train_day_start, args.train_year_end, args.train_month_end,
                                                                       args.train_day_end, args.first_year)
-    train_start_idx = max(train_start_idx,24)
+    #train_start_idx = max(train_start_idx,24)
 
     val_start_idx, val_end_idx = date_to_idxs(2007, 1, 1, 2007, 12, 31, 2001)
+    
+    if val_start_idx >= 24:
+        val_start_idx = val_start_idx-24
 
     with open(args.input_path+args.graph_file, 'rb') as f:
         low_high_graph = pickle.load(f)
@@ -151,9 +159,15 @@ if __name__ == '__main__':
         target_train = pickle.load(f)
 
     # Define input and target
-    low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx)-24:max(train_end_idx, val_end_idx),:]
-    target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]
-
+    if args.dataset_name == "Dataset_Graph_CNN_GNN":
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # nodes, var, lev, time
+    elif args.dataset_name == "Dataset_Graph_CNN_GNN_new":
+        low_high_graph['low'].x = low_high_graph['low'].x[:,:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # nodes, var, time, lev
+    elif args.dataset_name == "Dataset_Graph_subpixel": # or args.dataset_name == "Dataset_StaticGraphTemporalSignal":
+        low_high_graph['low'].x = low_high_graph['low'].x[min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:,:,:,:]
+    else:
+        low_high_graph['low'].x = low_high_graph['low'].x[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx),:] # nodes, time, var*lev
+    target_train = target_train[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)] # 0, 140256
 
     # Define a mask to ignore time indexes with all nan values
     mask_not_all_nan = [torch.tensor(True) for i in range(24)]
@@ -179,7 +193,8 @@ if __name__ == '__main__':
         val_idxs_list = [*range(val_start_idx - offset, val_end_idx - offset)]
 
     train_idxs = torch.tensor(train_idxs_list)[mask_not_all_nan[train_idxs_list]]
-    val_idxs = torch.tensor(val_idxs_list)[mask_not_all_nan[val_idxs_list]]
+    #val_idxs = torch.tensor(val_idxs_list)[mask_not_all_nan[val_idxs_list]]
+    val_idxs = torch.tensor(val_idxs_list)
     
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
@@ -192,7 +207,7 @@ if __name__ == '__main__':
 
     Dataset_Graph = getattr(dataset, args.dataset_name)
     
-    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "weighted_mse_loss_ASYM":
+    if args.loss_fn == 'weighted_mse_loss' or args.loss_fn == "quantized_loss" or args.loss_fn == "quantized_bins_loss" or args.loss_fn == "binary_cross_entropy_with_logits" or args.loss_fn == "weighted_mae_mse_loss":
         with open(args.input_path+args.weights_file, 'rb') as f:
             weights_reg = pickle.load(f)
         weights_reg = weights_reg[:,min(train_start_idx, val_start_idx):max(train_end_idx, val_end_idx)]
@@ -211,7 +226,7 @@ if __name__ == '__main__':
         dataset_graph = Dataset_Graph(targets=target_train,
             graph=low_high_graph)
 
-    custom_collate_fn = getattr(dataset, 'custom_collate_fn_graph')
+    custom_collate_fn = getattr(dataset, args.collate_name)
         
     #-- split into trainset and testset
     # generator=torch.Generator().manual_seed(42)
@@ -221,16 +236,16 @@ if __name__ == '__main__':
     dataset_graph_val = torch.utils.data.Subset(dataset_graph, val_idxs)
 
     sampler_graph_train = Iterable_Graph(dataset_graph=dataset_graph_train, shuffle=True)
-    sampler_graph_val = Iterable_Graph(dataset_graph=dataset_graph_val, shuffle=True)
+    sampler_graph_val = Iterable_Graph(dataset_graph=dataset_graph_val, shuffle=False)
 
     if accelerator is None or accelerator.is_main_process:
         with open(args.output_path+args.log_file, 'a') as f:
-            f.write(f'\nTrainset size = {len(dataset_graph_train)}, validationset size = {len(sampler_graph_val)}.')
+            f.write(f'\nTrainset size = {len(dataset_graph_train)}, validationset size = {len(dataset_graph_val)}.')
 
     dataloader_train = torch.utils.data.DataLoader(dataset_graph_train, batch_size=args.batch_size, num_workers=0,
                     sampler=sampler_graph_train, collate_fn=custom_collate_fn)
 
-    dataloader_val = torch.utils.data.DataLoader(dataset_graph_val, batch_size=args.batch_size, num_workers=0,
+    dataloader_val = torch.utils.data.DataLoader(dataset_graph_val, batch_size=1, num_workers=0,
                     sampler=sampler_graph_val, collate_fn=custom_collate_fn)
 
     if accelerator is None or accelerator.is_main_process:
@@ -239,8 +254,10 @@ if __name__ == '__main__':
             f.write(f"\nRAM memory {round((used_memory/total_memory) * 100, 2)} %")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.5)
+    #lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
 
 #-----------------------------------------------------
@@ -250,16 +267,11 @@ if __name__ == '__main__':
 
     epoch_start=0
     
-    if args.ctd_training:
-        if accelerator is None or accelerator.is_main_process:
-            with open(args.output_path+args.log_file, 'a') as f:
-                f.write("\nContinuing the training.")
-        accelerator.load_state(args.checkpoint_ctd)
-        epoch_start = torch.load(args.checkpoint_ctd+"epoch")["epoch"] + 1
-    
     if accelerator is not None:
-        model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn = accelerator.prepare(
-            model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn)
+        # model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn = accelerator.prepare(
+        #     model, optimizer, dataloader_train, dataloader_val, lr_scheduler, loss_fn)
+        model, optimizer, dataloader_train, lr_scheduler, loss_fn = accelerator.prepare(
+            model, optimizer, dataloader_train, lr_scheduler, loss_fn)
         if accelerator.is_main_process:
             with open(args.output_path+args.log_file, 'a') as f:
                 f.write("\nUsing accelerator to prepare model, optimizer, dataloader and loss_fn...")
@@ -268,6 +280,13 @@ if __name__ == '__main__':
             f.write("\nNot using accelerator to prepare model, optimizer, dataloader and loss_fn...")
         model = model.cuda()
 
+    if args.ctd_training:
+        if accelerator is None or accelerator.is_main_process:
+            with open(args.output_path+args.log_file, 'a') as f:
+                f.write("\nContinuing the training.")
+        accelerator.load_state(args.checkpoint_ctd)
+        epoch_start = torch.load(args.checkpoint_ctd+"epoch")["epoch"] + 1
+    
     check_freezed_layers(model, args.output_path, args.log_file, accelerator)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
